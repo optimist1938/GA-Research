@@ -1,0 +1,6 @@
+[submodule "3D Pose experiemtns/clifford-group-equivariant-neural-networks"]
+	path = 3D Pose experiemtns/clifford-group-equivariant-neural-networks
+	url = https://github.com/DavidRuhe/clifford-group-equivariant-neural-networks.git
+[submodule "3D Pose experiemtns/image2sphere"]
+	path = 3D Pose experiemtns/image2sphere
+	url = https://github.com/dmklee/image2sphere.git
