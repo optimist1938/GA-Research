@@ -6,7 +6,7 @@ def wandb_create_run(run_name):
     if not run_name:
         return None
     run = wandb.init(
-        project="tralelero",
+        project="Tralalero",
         name=run_name
     )
     return run
