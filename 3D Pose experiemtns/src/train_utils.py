@@ -21,3 +21,7 @@ def train_epoch(model, loader, optimizer, criterion):
     total_loss /= n_objects
 
     return total_loss
+
+
+def train(model, loader, optimizer, criterion, run):
+    pass
