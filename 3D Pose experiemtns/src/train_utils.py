@@ -94,7 +94,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             run.log({
                 "train_loss" : train_loss,
                 "val_loss" : val_loss,
-                "learning_rate" : scheduler.get_last_lr(),
+                "learning_rate" : scheduler.get_last_lr()[0],
                 "gradient_norm" : grad_norm(model)
             })
         scheduler.step()

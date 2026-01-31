@@ -26,7 +26,6 @@ def main():
     parser = create_argparser()
     config = parser.parse_args()
     config.device = get_available_device()
-    print(config.device)
     train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate_tralalero(config)
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)

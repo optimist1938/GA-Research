@@ -26,7 +26,7 @@ def wandb_log_artifact(run, path_to_artifact : Path, artifact_type="artifact"):
     if run is None:
         return
     artifact = wandb.Artifact(name=path_to_artifact.name, type=artifact_type)
-    artifact.add_file(path)
+    artifact.add_file(path_to_artifact.__str__())
     run.log_artifact(artifact)
 
 
