@@ -1,5 +1,7 @@
 from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import Dataset
+from image2sphere.pascal_dataset import Pascal3D
+from torch.utils.data import DataLoader
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, size=32):
@@ -15,3 +17,14 @@ class PascalSanityCheckDataset(Dataset):
         if i < self.size:
             return self.base_dataset[i]
         raise ValueError("List Index out of Range")
+
+
+def create_dataloaders(config):
+    if not config.sanity_check:
+        train_dataset = Pascal3D(config.path_to_datasets, "train")
+        val_dataset = Pascal3D(config.path_to_datasets, "test")
+    else:
+        train_dataset = val_dataset = PascalSanityCheckDataset(size=config.batch_size)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=False)
+    return train_loader, val_loader
