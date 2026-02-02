@@ -21,8 +21,8 @@ class PascalSanityCheckDataset(Dataset):
 
 def create_dataloaders(config):
     if not config.sanity_check:
-        train_dataset = Pascal3D(config.path_to_datasets, "train")
-        val_dataset = Pascal3D(config.path_to_datasets, "test")
+        train_dataset = Pascal3D(config.path_to_datasets, True)
+        val_dataset = Pascal3D(config.path_to_datasets, False)
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=True)
