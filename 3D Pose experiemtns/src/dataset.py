@@ -4,9 +4,9 @@ from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import DataLoader
 
 class PascalSanityCheckDataset(Dataset):
-    def __init__(self, size=32):
-        self.base_dataset = Pascal3D(datasets_dir="/Users/chaykovsky/Downloads", train="train")
-        self.size = size
+    def __init__(self, config):
+        self.base_dataset = Pascal3D(datasets_dir=config.path_to_datasets, train="train")
+        self.size = config.batch_size
 
 
     def __len__(self):
@@ -24,7 +24,7 @@ def create_dataloaders(config):
         train_dataset = Pascal3D(config.path_to_datasets, "train")
         val_dataset = Pascal3D(config.path_to_datasets, "test")
     else:
-        train_dataset = val_dataset = PascalSanityCheckDataset(size=config.batch_size)
+        train_dataset = val_dataset = PascalSanityCheckDataset(config)
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=False)
     return train_loader, val_loader
