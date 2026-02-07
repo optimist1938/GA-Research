@@ -9,7 +9,7 @@ from train_utils import train
 from config import create_argparser, JsonYamlevich
 from pose_3d.src.wandb_utils import wandb_create_run, wandb_finish_run
 
-from algebra.cliffordalgebra import CliffordAlgebra
+from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 def main():
     args = create_argparser().parse_args()

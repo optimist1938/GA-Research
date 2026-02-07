@@ -1,7 +1,7 @@
-from models.modules.linear import MVLinear
-from models.modules.gp import SteerableGeometricProductLayer
-from models.modules.mvlayernorm import MVLayerNorm
-from models.modules.mvsilu import MVSiLU
+from cliffod.models.modules.linear import MVLinear
+from cliffod.models.modules.gp import SteerableGeometricProductLayer
+from cliffod.models.modules.mvlayernorm import MVLayerNorm
+from clifford.models.modules.mvsilu import MVSiLU
 
 import torch.nn as nn 
 
