@@ -1,34 +1,77 @@
 import torch
 import torch.nn as nn
-from src.config import create_argparser
-from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline
-from src.wandb_utils import wandb_create_run, wandb_log_code, wandb_log_artifact, wandb_finish_run
-from src.train_utils import train, form_checkpoint, get_available_device
 from pathlib import Path
+
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
-def instantiate_tralalero(config):
+from src.config import create_argparser
+from src.dataset import create_dataloaders
+from src.model import TralaleroCompetitor, MLPBaseline, I2S
+from src.train_utils import train, form_checkpoint, get_available_device
+from src.wandb_utils import (
+    wandb_create_run,
+    wandb_log_code,
+    wandb_log_artifact,
+    wandb_finish_run,
+)
+
+
+def _make_algebra():
+    return CliffordAlgebra((1, 1, 1, 1, -1))
+
+
+def instantiate(config):
     train_loader, val_loader = create_dataloaders(config)
-    print("Created two pretty Tralaloaders!")
-    algebra = CliffordAlgebra((1, 1, 1, 1, -1))
-    tralalero = TralaleroCompetitor(algebra)
-    print("Spawned Tralelero")
-    optimizer = torch.optim.Adam(tralalero.parameters())
+    print("Created Tralaloaders")
+
+    algebra = _make_algebra()
+
+    if config.model == "tralalero":
+        model = TralaleroCompetitor(algebra)
+    elif config.model == "mlp":
+        model = MLPBaseline()
+    elif config.model == "i2s":
+        model = I2S(
+            algebra=algebra,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            n_mv=config.n_mv,
+            mv_dim=algebra.dim,
+            hidden_dim=config.hidden_dim,
+            temperature=config.temperature,
+        )
+    else:
+        raise ValueError(f"Unknown model: {config.model}")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
-    criterion = nn.MSELoss()
+
+    # loss selection:
+    # - mse: classic regression to rotation matrix (Tralalero / MLPBaseline)
+    # - prob: use model.loss(...) (I2S grid CE)
+    if config.loss == "mse":
+        criterion = nn.MSELoss()
+    elif config.loss == "prob":
+        criterion = None
+    else:
+        raise ValueError(f"Unknown loss: {config.loss}")
+
     run = wandb_create_run(config.run_name)
     print("W&B logging set up completed")
-    return train_loader, val_loader, tralalero, optimizer, scheduler, criterion, run
+
+    return train_loader, val_loader, model, optimizer, scheduler, criterion, run
 
 
 def main():
     parser = create_argparser()
     config = parser.parse_args()
     config.device = get_available_device()
-    train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate_tralalero(config)
+
+    train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate(config)
+
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
+
     checkpoint_path = form_checkpoint(model, optimizer, scheduler, config)
     wandb_log_artifact(run, checkpoint_path, artifact_type="checkpoint")
     wandb_finish_run(run)
