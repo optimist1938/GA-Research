@@ -36,7 +36,6 @@ def instantiate(config):
             lmax=config.lmax,
             rec_level=config.rec_level,
             n_mv=config.n_mv,
-            mv_dim=algebra.dim,
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
         )
