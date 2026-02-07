@@ -98,7 +98,6 @@ class I2S(nn.Module):
         coeffs = coeffs_mv[..., 0]          # scalar part -> (B, K)
         return coeffs
 
-    @torch.no_grad()
     def logits_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:
         """Evaluate (unnormalized) density logits on the internal SO(3) grid."""
         # coeffs: (B, K) or (B, 1, K)
