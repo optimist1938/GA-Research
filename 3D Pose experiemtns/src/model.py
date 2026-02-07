@@ -7,7 +7,7 @@ from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
 from image2sphere.models import ResNet
-from image2sphere.so3_uitls import so3_healpix_grid, flat_wigner, nearest_rotmat
+from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import Dict
 
@@ -53,7 +53,6 @@ class I2S(nn.Module):
         lmax: int = 6,
         rec_level: int = 3,
         n_mv: int = 8,
-        mv_dim: int = 32,
         hidden_dim: int = 32,
         temperature: float = 1.0,
     ):
@@ -66,15 +65,15 @@ class I2S(nn.Module):
         self.encoder = ResNet()
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        enc_channels = getattr(self.encoder, "output_shape", None)
+        enc_channels = getattr(self.encoder, "output_shape", None)[0]
 
-        self._mv_dim = int(mv_dim)
+        self._mv_dim = int(2**algebra.dim)
         self._n_mv = int(n_mv)
 
         self.project = nn.Linear(enc_channels, self._n_mv * self._mv_dim)
 
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
-        self.ga_head = CliffordFourierHead(
+        self.ga_head = TralaleroTralala(
             algebra=algebra,
             in_features=self._n_mv,
             hidden_dim=hidden_dim,
