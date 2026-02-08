@@ -48,17 +48,10 @@ def get_available_device():
     return torch.device("cpu")
 
 
-def _move_batch_to_device(data, device):
-    out = {}
-    for k, v in data.items():
-        out[k] = v.to(device) if torch.is_tensor(v) else v
-    return out
-
-
 def _compute_loss(model, data, criterion, config):
     outputs = model(data["img"])
     targets = data["rot"]
-    if config.loss ==  "prob":
+    if config.loss == "prob":
         idx = model.get_nearest_idx(targets)
         return criterion(outputs, idx)
     return criterion(outputs,targets)
@@ -71,8 +64,8 @@ def train_epoch(model, loader, optimizer, criterion, config):
     scaler = torch.amp.GradScaler("cuda")
     model.train()
     for data in tqdm(loader):
-        data = _move_batch_to_device(data, config.device)
-        img = data["img"]
+        data["img"].to(config.device)
+        data["rot"].to(config.device)
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -82,7 +75,7 @@ def train_epoch(model, loader, optimizer, criterion, config):
         scaler.step(optimizer)
         scaler.update()
 
-        bs = img.shape[0]
+        bs = data["img"].shape[0]
         total_loss += float(loss.detach().item()) * bs
         n_objects += bs
 
@@ -96,13 +89,12 @@ def validate_epoch(model, loader, criterion, config):
 
     model.eval()
     for data in tqdm(loader):
-        data = _move_batch_to_device(data, config.device)
-        img = data["img"]
+        data["img"].to(config.device)
+        data["rot"].to(config.device)
 
-        outputs = model(img)
-        loss = _compute_loss(model, data, outputs, criterion, config)
+        loss = _compute_loss(model, data, criterion, config)
 
-        bs = img.shape[0]
+        bs = data["img"].shape[0]
         total_loss += float(loss.detach().item()) * bs
         n_objects += bs
 
