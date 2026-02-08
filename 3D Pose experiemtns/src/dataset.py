@@ -2,7 +2,6 @@ from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import Dataset
 from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import DataLoader
-import torch
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, config):
@@ -21,7 +20,7 @@ class PascalSanityCheckDataset(Dataset):
     
 
 class InMemoryDataset(Dataset):
-    def __init__(self, base: Dataset, dtype_img=torch.uint8):
+    def __init__(self, base: Dataset):
         self.base = base
 
         imgs = []
@@ -29,13 +28,7 @@ class InMemoryDataset(Dataset):
 
         for i in base:
             x, y = i["img"],i["rot"]           
-            if isinstance(x, torch.Tensor):
-                if dtype_img is not None and x.dtype != dtype_img:
-                    if x.dtype.is_floating_point:
-                        x = (x.clamp(0, 1) * 255).to(torch.uint8)
-                    else:
-                        x = x.to(dtype_img)
-            imgs.append(x.cpu())
+            imgs.append(x)
             targets.append(y)
 
         self.imgs = imgs
@@ -47,10 +40,6 @@ class InMemoryDataset(Dataset):
     def __getitem__(self, idx):
         x = self.imgs[idx]
         y = self.targets[idx]
-
-        if isinstance(x, torch.Tensor) and x.dtype == torch.uint8:
-            x = x.float().div(255.0)
-
         return {"img" : x, "rot" : y}
 
 
