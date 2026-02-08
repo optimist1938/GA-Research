@@ -47,8 +47,10 @@ class InMemoryDataset(Dataset):
 def create_dataloaders(config):
 
     if not config.sanity_check:
-        train_dataset = InMemoryDataset(Pascal3D(config.path_to_datasets, True)) if config.ram_memory else Pascal3D(config.path_to_datasets, True)
-        val_dataset = InMemoryDataset(Pascal3D(config.path_to_datasets, False)) if config.ram_memory else Pascal3D(config.path_to_datasets, False)
+        train = Pascal3D(config.path_to_datasets, True)
+        val = Pascal3D(config.path_to_datasets, False)
+        train_dataset = InMemoryDataset(train) if config.ram_memory else train
+        val_dataset = InMemoryDataset(val) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
     num_workers = 0 if config.ram_memory else 4
