@@ -49,8 +49,9 @@ def get_available_device():
 
 
 def _compute_loss(model, data, criterion, config):
-    outputs = model(data["img"])
-    targets = data["rot"]
+    img = data["img"].to(config.device)
+    targets = data["rot"].to(config.device)
+    outputs = model(img)
     if config.loss == "prob":
         idx = model.get_nearest_idx(targets)
         return criterion(outputs, idx)
@@ -64,9 +65,6 @@ def train_epoch(model, loader, optimizer, criterion, config):
     scaler = torch.amp.GradScaler("cuda")
     model.train()
     for data in tqdm(loader):
-        data["img"].to(config.device)
-        data["rot"].to(config.device)
-
         optimizer.zero_grad(set_to_none=True)
 
         loss = _compute_loss(model, data, criterion, config)
@@ -89,9 +87,6 @@ def validate_epoch(model, loader, criterion, config):
 
     model.eval()
     for data in tqdm(loader):
-        data["img"].to(config.device)
-        data["rot"].to(config.device)
-
         loss = _compute_loss(model, data, criterion, config)
 
         bs = data["img"].shape[0]
