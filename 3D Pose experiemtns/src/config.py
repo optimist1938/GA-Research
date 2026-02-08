@@ -22,6 +22,7 @@ def create_argparser():
     parser.add_argument("--hidden_dim", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
+    parser.add_argument("--ram_memory",type=bool,default=False)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 
