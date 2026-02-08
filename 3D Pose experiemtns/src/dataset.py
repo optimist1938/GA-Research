@@ -27,8 +27,8 @@ class InMemoryDataset(Dataset):
         imgs = []
         targets = []
 
-        for i in range(len(base)):
-            x, y = base[i]           
+        for i in base:
+            x, y = i["img"],i["rot"]           
             if isinstance(x, torch.Tensor):
                 if dtype_img is not None and x.dtype != dtype_img:
                     if x.dtype.is_floating_point:
@@ -51,7 +51,7 @@ class InMemoryDataset(Dataset):
         if isinstance(x, torch.Tensor) and x.dtype == torch.uint8:
             x = x.float().div(255.0)
 
-        return x, y
+        return {"img" : x, "rot" : y}
 
 
 
