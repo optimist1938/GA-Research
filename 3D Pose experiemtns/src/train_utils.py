@@ -55,16 +55,13 @@ def _move_batch_to_device(data, device):
     return out
 
 
-def _compute_loss(model, data, outputs, criterion, config):
-    # criterion=None -> use model.loss(data)
-    if criterion is None:
-        if not hasattr(model, "loss"):
-            raise ValueError("criterion=None, but model has no .loss(...) method")
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            loss = model.loss(outputs, data, label_smoothing=config.label_smoothing)
-            return loss
+def _compute_loss(model, data, criterion, config):
+    outputs = model(data["img"])
     targets = data["rot"]
-    return criterion(outputs, targets)
+    if config.loss ==  "prob":
+        idx = model.get_nearest_idx(targets)
+        return criterion(outputs, idx)
+    return criterion(outputs,targets)
 
 
 def train_epoch(model, loader, optimizer, criterion, config):
@@ -79,8 +76,7 @@ def train_epoch(model, loader, optimizer, criterion, config):
 
         optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(img)
-        loss = _compute_loss(model, data, outputs, criterion, config)
+        loss = _compute_loss(model, data, criterion, config)
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)

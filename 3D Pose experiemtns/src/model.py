@@ -14,39 +14,7 @@ from typing import Dict
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
 
-
-class CliffordFourierHead(nn.Module):
-    """CG/GA head that maps a set of multivectors to scalar Fourier coefficients."""
-
-    def __init__(self, algebra, in_features: int, hidden_dim: int, out_features: int):
-        super().__init__()
-        self.fcgp1 = FullyConnectedSteerableGeometricProductLayer(
-            algebra, in_features=in_features, out_features=hidden_dim
-        )
-        self.act = MVSiLU(algebra, hidden_dim)
-        self.gp = SteerableGeometricProductLayer(algebra, hidden_dim)
-        self.fcgp2 = FullyConnectedSteerableGeometricProductLayer(
-            algebra, in_features=hidden_dim, out_features=out_features
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, in_features, mv_dim)
-        x = self.fcgp1(x)
-        x = self.act(x)
-        x = self.gp(x)
-        x = self.act(x)
-        x = self.fcgp2(x)
-        return x
-
-
 class I2S(nn.Module):
-    """Image2Sphere-like probabilistic pose head, but with Clifford/GA blocks.
-
-    Forward returns Fourier coefficients for a density s: SO(3) -> R in the SO(3) Fourier basis
-    (flattened Wigner-D blocks up to lmax). Provides helpers to evaluate the density on an SO(3)
-    grid and a probabilistic loss (cross-entropy over SO(3) grid bins).
-    """
-
     def __init__(
         self,
         algebra,
@@ -80,66 +48,41 @@ class I2S(nn.Module):
             out_features=self.num_coeffs,
         )
 
-        # Precompute SO(3) grid + Wigner matrices on CPU; register as buffers
-        xyx = so3_healpix_grid(rec_level=self.rec_level)  # (3, N)
-        wign = flat_wigner(self.lmax, *xyx)  # (N, num_coeffs)
-        # store for fast matmul: coeffs @ wigner_T -> logits over grid
+        xyx = so3_healpix_grid(rec_level=self.rec_level)
+        wign = flat_wigner(self.lmax, *xyx)
         self.register_buffer("so3_xyx", xyx, persistent=False)
         self.register_buffer("so3_wigner_T", wign.transpose(0, 1).contiguous(), persistent=False)
-        self.register_buffer("_so3_rotmats_cache",o3.angles_to_matrix(*self.so3_xyx),persistent=False)  # (K, N)
+        self.register_buffer("so3_rotmats_cache",o3.angles_to_matrix(*self.so3_xyx),persistent=False)
         
 
     def forward(self, x: torch.tensor) -> torch.Tensor:
-        fmap = self.encoder(x)              # (B, C, H, W)
-        fmap = self.avgpool(fmap).flatten(1)  # (B, C)
-        mv = self.project(fmap).view(fmap.shape[0], self._n_mv, self._mv_dim)  # (B, n_mv, mv_dim)
-
-        coeffs_mv = self.ga_head(mv)        # (B, K, mv_dim) multivector outputs
-        coeffs = coeffs_mv[..., 0]          # scalar part -> (B, K)
-        return coeffs
+        fmap = self.encoder(x)
+        fmap = self.avgpool(fmap).flatten(1)
+        mv = self.project(fmap).view(fmap.shape[0], self._n_mv, self._mv_dim)
+        coeffs_mv = self.ga_head(mv)
+        coeffs = coeffs_mv[..., 0]
+        logits = self.logits_on_grid(coeffs)
+        logits = logits / max(self.temperature, 1e-8)
+        return logits
 
     def logits_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:
-        """Evaluate (unnormalized) density logits on the internal SO(3) grid."""
-        # coeffs: (B, K) or (B, 1, K)
         if coeffs.dim() == 3:
             coeffs = coeffs.squeeze(1)
-        return torch.matmul(coeffs, self.so3_wigner_T)  # (B, N)
+        return torch.matmul(coeffs, self.so3_wigner_T)  
 
     @torch.no_grad()
-    def probs_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:
-        logits = self.logits_on_grid(coeffs) / max(self.temperature, 1e-8)
+    def probs_on_grid(self, logits : torch.Tensor) -> torch.Tensor:
         return torch.softmax(logits, dim=-1)
 
     @torch.no_grad()
     def predict_rotmat(self, coeffs: torch.Tensor) -> torch.Tensor:
-        """Return MAP rotation (closest grid rotation)."""
         probs = self.probs_on_grid(coeffs)
-        idx = torch.argmax(probs, dim=-1)  # (B,)
-        # convert grid angles -> rotation matrices lazily via e3nn in so3_utils? not provided;
-        # we return indices to avoid adding more deps here.
+        idx = torch.argmax(probs, dim=-1)
         return idx
-
-    def loss(
-        self,
-        outputs,
-        data: Dict[str, torch.Tensor],
-        label_smoothing: float = 0.0,
-    ) -> torch.Tensor:
-        """Probabilistic loss like I2S: CrossEntropy over SO(3) grid bins.
-
-        - Predict Fourier coeffs
-        - Evaluate logits on SO(3) grid via Wigner matrices
-        - Find nearest grid bin to GT rotation
-        - CrossEntropy(logits, idx)
-        """
-        rot_gt = data["rot"]
-
-        coeffs = outputs                  # (B, K)
-        logits = self.logits_on_grid(coeffs)          # (B, N)
-        logits = logits / max(self.temperature, 1e-8)
-
-        idx = nearest_rotmat(rot_gt, self._so3_rotmats_cache)  # (B,)
-        return nn.CrossEntropyLoss(label_smoothing=label_smoothing)(logits, idx)
+    
+    @torch.no_grad()
+    def get_nearest_idx(self, rot_gt : torch.Tensor) :
+        return nearest_rotmat(rot_gt,self.so3_rotmats_cache)
 
 class TralaleroTralala(nn.Module):
     def __init__(self, algebra, in_features=512, hidden_dim=32, out_features=9):

@@ -49,13 +49,10 @@ def instantiate(config):
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
 
-    # loss selection:
-    # - mse: classic regression to rotation matrix (Tralalero / MLPBaseline)
-    # - prob: use model.loss(...) (I2S grid CE)
     if config.loss == "mse":
         criterion = nn.MSELoss()
     elif config.loss == "prob":
-        criterion = None
+        criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
 
