@@ -60,7 +60,9 @@ def _compute_loss(model, data, outputs, criterion, config):
     if criterion is None:
         if not hasattr(model, "loss"):
             raise ValueError("criterion=None, but model has no .loss(...) method")
-        return model.loss(data, label_smoothing=getattr(config, "label_smoothing", 0.0))
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            loss = model.loss(outputs, data, label_smoothing=config.label_smoothing)
+            return loss
     targets = data["rot"]
     return criterion(outputs, targets)
 
@@ -69,6 +71,7 @@ def train_epoch(model, loader, optimizer, criterion, config):
     total_loss = 0.0
     n_objects = 0
 
+    scaler = torch.amp.GradScaler("cuda")
     model.train()
     for data in tqdm(loader):
         data = _move_batch_to_device(data, config.device)
@@ -79,8 +82,9 @@ def train_epoch(model, loader, optimizer, criterion, config):
         outputs = model(img)
         loss = _compute_loss(model, data, outputs, criterion, config)
 
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         bs = img.shape[0]
         total_loss += float(loss.detach().item()) * bs
@@ -110,7 +114,6 @@ def validate_epoch(model, loader, criterion, config):
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
-    model.to(config.device)
 
     for i in range(config.n_epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, config)

@@ -41,8 +41,15 @@ def instantiate(config):
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
+    
+    config.device = get_available_device()
+    
+    model.to(config.device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    if config.device.type == "cuda":
+        model = torch.compile(model)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
 
     # loss selection:
@@ -64,7 +71,8 @@ def instantiate(config):
 def main():
     parser = create_argparser()
     config = parser.parse_args()
-    config.device = get_available_device()
+
+    torch.backends.cudnn.benchmark = True
 
     train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate(config)
 

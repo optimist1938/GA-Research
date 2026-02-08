@@ -121,6 +121,7 @@ class I2S(nn.Module):
 
     def loss(
         self,
+        outputs,
         data: Dict[str, torch.Tensor],
         label_smoothing: float = 0.0,
     ) -> torch.Tensor:
@@ -131,15 +132,11 @@ class I2S(nn.Module):
         - Find nearest grid bin to GT rotation
         - CrossEntropy(logits, idx)
         """
-        img = data["img"]
         rot_gt = data["rot"]
 
-        coeffs = self.forward(img)                    # (B, K)
+        coeffs = outputs                  # (B, K)
         logits = self.logits_on_grid(coeffs)          # (B, N)
         logits = logits / max(self.temperature, 1e-8)
-
-        if self._so3_rotmats_cache.device != logits.device:
-            self._so3_rotmats_cache.device = self._so3_rotmats_cache.device.to(logits.device)
 
         idx = nearest_rotmat(rot_gt, self._so3_rotmats_cache)  # (B,)
         return nn.CrossEntropyLoss(label_smoothing=label_smoothing)(logits, idx)

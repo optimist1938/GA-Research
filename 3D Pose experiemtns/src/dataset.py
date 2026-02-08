@@ -25,6 +25,6 @@ def create_dataloaders(config):
         val_dataset = Pascal3D(config.path_to_datasets, False)
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=True,persistent_workers=True,prefetch_factor=4)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=4, pin_memory=True, shuffle=False,persistent_workers=True,prefetch_factor=4)
     return train_loader, val_loader
