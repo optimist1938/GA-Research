@@ -46,9 +46,6 @@ def instantiate(config):
     
     model.to(config.device)
 
-    if config.device.type == "cuda":
-        model = torch.compile(model)
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
 
