@@ -7,6 +7,7 @@ def create_argparser():
     parser.add_argument("--n_epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--path_to_datasets", type=str, required=True)
+    parser.add_argument("--path_to_checkpoint",type=str,default=None)
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
 

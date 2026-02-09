@@ -7,7 +7,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from src.config import create_argparser
 from src.dataset import create_dataloaders
 from src.model import TralaleroCompetitor, MLPBaseline, I2S
-from src.train_utils import train, form_checkpoint, get_available_device
+from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
 from src.wandb_utils import (
     wandb_create_run,
     wandb_log_code,
@@ -69,6 +69,10 @@ def main():
     torch.backends.cudnn.benchmark = True
 
     train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate(config)
+
+    path = config.path_to_checkpoint
+    if path is not None:
+        load_checkpoint(model, optimizer, scheduler, path , config.device)
 
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)

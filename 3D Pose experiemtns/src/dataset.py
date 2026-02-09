@@ -108,7 +108,7 @@ def create_dataloaders(config):
         val_dataset = InMemoryDataset(val) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
-    num_workers = 0 if config.ram_memory else 4
+    num_workers = 2 if config.ram_memory else 4
     persistent_workers = (num_workers > 0)
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=True,persistent_workers=persistent_workers)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=False,persistent_workers=persistent_workers)
