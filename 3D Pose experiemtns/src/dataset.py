@@ -100,7 +100,6 @@ class InMemoryDataset(Dataset):
 
 
 def create_dataloaders(config):
-    print(config)
     if not config.sanity_check:
         train = Pascal3D(config.path_to_datasets, train=True)
         val = Pascal3D(config.path_to_datasets, train=False)
