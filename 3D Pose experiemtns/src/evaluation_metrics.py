@@ -54,11 +54,15 @@ def calculate_evaluation_metrics(model, loader, config):
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
         clas = batch["cls"].to(device)
-        if isinstance(model, I2S):
-            pred_rotmat = model.predict(img, clas).cpu()
-        elif isinstance(model,I2SFake):
-            print("We got the right flow")
-            pred_rotmat = model.predict(img).cpu()
+        # Жека ты знаешь 
+        # Мужчины не плачут
+        # А слёзы от ветра
+        # А слёзы от пепла
+        if hasattr(model, "predict") and callable(getattr(model, "predict")):
+            try:
+                pred_rotmat = model.predict(img, clas).cpu()
+            except TypeError:
+                pred_rotmat = model.predict(img).cpu()
         else:
             pred_rotmat = model(img).cpu()
         gt_rotmat = batch['rot'].cpu()
