@@ -26,8 +26,8 @@ class InMemoryDataset(Dataset):
         imgs = []
         targets = []
 
-        for i in base:
-            x, y = i["img"],i["rot"]           
+        for i in range(len(base)):
+            x, y = base[i]["img"],base[i]["rot"]           
             imgs.append(x)
             targets.append(y)
 
