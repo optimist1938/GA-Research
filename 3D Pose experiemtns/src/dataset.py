@@ -32,7 +32,7 @@ class InMemoryDataset(Dataset):
     def __init__(
         self,
         base: Dataset,
-        build_workers: int = 8,
+        build_workers: int = 4,
         build_batch_size: int = 64,
         store_uint8: bool = True,
         img_key: str = "img",
@@ -70,7 +70,7 @@ class InMemoryDataset(Dataset):
         )
 
         write_pos = 0
-        for imgs, rots in loader:
+        for imgs, rots in tqdm(loader):
             bsz = imgs.shape[0]
 
             if store_uint8:
