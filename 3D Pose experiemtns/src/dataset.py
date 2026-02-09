@@ -2,7 +2,7 @@ from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import Dataset
 from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import DataLoader
-import tqdm
+from tqdm import tqdm
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, config):
