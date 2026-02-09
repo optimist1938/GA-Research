@@ -60,11 +60,11 @@ def calculate_evaluation_metrics(model, loader, config):
         # А слёзы от пепла
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
             try:
-                pred_rotmat = model.predict(img, clas).cpu()
+                pred_rotmat = model.predict(img, clas)
             except TypeError:
-                pred_rotmat = model.predict(img).cpu()
+                pred_rotmat = model.predict(img)
         else:
-            pred_rotmat = model(img).cpu()
-        gt_rotmat = batch['rot'].cpu()
+            pred_rotmat = model(img)
+        gt_rotmat = batch['rot']
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
     return np.hstack(err)
