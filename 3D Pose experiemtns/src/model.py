@@ -81,6 +81,11 @@ class I2S(nn.Module):
         return idx
     
     @torch.no_grad()
+    def predict(self, x) : 
+        idx = self.predict_rotmat(self.forward(x))
+        return self.so3_rotmats_cache[idx]
+    
+    @torch.no_grad()
     def get_nearest_idx(self, rot_gt : torch.Tensor) :
         return nearest_rotmat(rot_gt,self.so3_rotmats_cache)
 
