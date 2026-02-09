@@ -76,7 +76,7 @@ def main():
     if path is not None:
         load_checkpoint(model, optimizer, scheduler, path , config.device)
         print("Checkpoint successfully loaded. Starting evaluation")
-        torch.save("res.pth",torch.tensor(calculate_evaluation_metrics(model,val_loader,config)))
+        torch.save(torch.tensor(calculate_evaluation_metrics(model,val_loader,config)),"res.pth")
 
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
