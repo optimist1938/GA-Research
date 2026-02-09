@@ -2,6 +2,7 @@ from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import Dataset
 from image2sphere.pascal_dataset import Pascal3D
 from torch.utils.data import DataLoader
+import tqdm
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, config):
@@ -26,7 +27,7 @@ class InMemoryDataset(Dataset):
         imgs = []
         targets = []
 
-        for i in range(len(base)):
+        for i in tqdm(range(len(base))):
             x, y = base[i]["img"],base[i]["rot"]           
             imgs.append(x)
             targets.append(y)
@@ -47,8 +48,8 @@ class InMemoryDataset(Dataset):
 def create_dataloaders(config):
 
     if not config.sanity_check:
-        train = Pascal3D(config.path_to_datasets, True)
-        val = Pascal3D(config.path_to_datasets, False)
+        train = Pascal3D(config.path_to_datasets, train=True)
+        val = Pascal3D(config.path_to_datasets, train=False)
         train_dataset = InMemoryDataset(train) if config.ram_memory else train
         val_dataset = InMemoryDataset(val) if config.ram_memory else val
     else:
