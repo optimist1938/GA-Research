@@ -33,7 +33,7 @@ class InMemoryDataset(Dataset):
         self,
         base: Dataset,
         build_workers: int = 4,
-        build_batch_size: int = 64,
+        build_batch_size: int = 16,
         store_uint8: bool = True,
         img_key: str = "img",
         rot_key: str = "rot",
