@@ -70,7 +70,7 @@ class InMemoryDataset(Dataset):
         )
 
         write_pos = 0
-        for imgs, rots in tqdm(loader):
+        for imgs, rots in tqdm(loader,desc="Loading data into RAM"):
             bsz = imgs.shape[0]
 
             if store_uint8:
