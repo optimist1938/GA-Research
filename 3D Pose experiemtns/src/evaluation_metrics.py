@@ -57,6 +57,7 @@ def calculate_evaluation_metrics(model, loader, config):
         if isinstance(model, I2S):
             pred_rotmat = model.predict(img, clas).cpu()
         elif isinstance(model,I2SFake):
+            print("We got the right flow")
             pred_rotmat = model.predict(img).cpu()
         else:
             pred_rotmat = model(img).cpu()
