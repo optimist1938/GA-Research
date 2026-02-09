@@ -1,6 +1,7 @@
 import torch
 from image2sphere.so3_utils import rotation_error
 from image2sphere.predictor import I2S
+from model import I2S as I2SFake
 from tqdm import tqdm
 import numpy as np
 
@@ -54,6 +55,8 @@ def calculate_evaluation_metrics(model, loader, config):
         img = batch["img"].to(device)
         clas = batch["cls"].to(device)
         if isinstance(model, I2S):
+            pred_rotmat = model.predict(img, clas).cpu()
+        elif isinstance(model,I2SFake):
             pred_rotmat = model.predict(img).cpu()
         else:
             pred_rotmat = model(img).cpu()
