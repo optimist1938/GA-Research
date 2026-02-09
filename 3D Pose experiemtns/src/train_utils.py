@@ -1,6 +1,8 @@
 import torch
 from tqdm import tqdm
 from pathlib import Path
+import numpy as np
+from src.evaluation_metrics import rotation_error_with_projection
 
 def form_checkpoint(model, optimizer, scheduler, config):
     checkpoint = {
@@ -70,6 +72,7 @@ def train_epoch(model, loader, optimizer, criterion, config):
 def validate_epoch(model, loader, criterion, config):
     total_loss = 0
     n_objects = 0
+    errors = []
 
     model.eval()
     for data in tqdm(loader):
@@ -77,23 +80,26 @@ def validate_epoch(model, loader, criterion, config):
         outputs = model(img)
         loss = criterion(outputs, targets)
 
+        errors.append(rotation_error_with_projection(outputs, targets))
+
         total_loss += loss
         n_objects += len(img)
 
     total_loss /= n_objects
 
-    return total_loss
+    return total_loss, np.median(np.hstack(errors)).__float__()
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
     model.to(config.device)
     for i in range(config.n_epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, config)
-        val_loss = validate_epoch(model, val_loader, criterion, config)
+        val_loss, mre = validate_epoch(model, val_loader, criterion, config)
         if run is not None:
             run.log({
                 "train_loss" : train_loss,
                 "val_loss" : val_loss,
+                "median_rotation_error" : mre,
                 "learning_rate" : scheduler.get_last_lr()[0],
                 "gradient_norm" : grad_norm(model)
             })

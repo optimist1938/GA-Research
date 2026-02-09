@@ -5,6 +5,7 @@ from src.dataset import create_dataloaders
 from src.model import TralaleroCompetitor, MLPBaseline
 from src.wandb_utils import wandb_create_run, wandb_log_code, wandb_log_artifact, wandb_finish_run
 from src.train_utils import train, form_checkpoint, get_available_device
+from src.evaluation_metrics import create_technical_matrices
 from pathlib import Path
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
@@ -26,6 +27,7 @@ def main():
     parser = create_argparser()
     config = parser.parse_args()
     config.device = get_available_device()
+    create_technical_matrices(config)
     train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate_tralalero(config)
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
