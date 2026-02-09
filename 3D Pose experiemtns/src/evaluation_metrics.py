@@ -65,6 +65,6 @@ def calculate_evaluation_metrics(model, loader, config):
                 pred_rotmat = model.predict(img)
         else:
             pred_rotmat = model(img)
-        gt_rotmat = batch['rot']
+        gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
     return np.hstack(err)
