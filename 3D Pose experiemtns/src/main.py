@@ -75,11 +75,12 @@ def main():
     path = config.path_to_checkpoint
     if path is not None:
         
-        load_checkpoint(model, optimizer, scheduler, path , config.device)
-        print("Checkpoint successfully loaded. Starting evaluation")
-        torch.save(torch.tensor(calculate_evaluation_metrics(model,val_loader,config)),"res.pth")
-        
-        print("Failed to load checkpoint. Starting from scratch")
+        try:
+            load_checkpoint(model, optimizer, scheduler, path , config.device)
+            print("Checkpoint successfully loaded. Starting evaluation")
+            torch.save(torch.tensor(calculate_evaluation_metrics(model,val_loader,config)),"res.pth")
+        except Exception as e:
+            print(f"Failed to load checkpoint. Starting from scratch. Error: {e}")
 
     wandb_log_code(run, Path("."))
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
