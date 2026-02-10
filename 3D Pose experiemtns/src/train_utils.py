@@ -1,6 +1,8 @@
 import torch
 from tqdm import tqdm
 from pathlib import Path
+import numpy as np
+from src.evaluation_metrics import rotation_error_with_projection
 
 
 def form_checkpoint(model, optimizer, scheduler, config):
@@ -84,34 +86,35 @@ def train_epoch(model, loader, optimizer, criterion, config):
 def validate_epoch(model, loader, criterion, config):
     total_loss = 0.0
     n_objects = 0
+    errors = []
 
     model.eval()
     for data in tqdm(loader):
         loss = _compute_loss(model, data, criterion, config)
 
-        bs = data["img"].shape[0]
-        total_loss += float(loss.detach().item()) * bs
-        n_objects += bs
+        errors.append(rotation_error_with_projection(outputs, targets))
 
-    return total_loss / max(n_objects, 1)
+        total_loss += loss
+        n_objects += len(img)
+
+    total_loss /= n_objects
+
+    return total_loss, np.median(np.hstack(errors)).__float__()
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
 
     for i in range(config.n_epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, config)
-        val_loss = validate_epoch(model, val_loader, criterion, config)
-
+        val_loss, mre = validate_epoch(model, val_loader, criterion, config)
         if run is not None:
-            run.log(
-                {
-                    "train_loss": train_loss,
-                    "val_loss": val_loss,
-                    "learning_rate": scheduler.get_last_lr()[0],
-                    "gradient_norm": grad_norm(model),
-                }
-            )
-
+            run.log({
+                "train_loss" : train_loss,
+                "val_loss" : val_loss,
+                "median_rotation_error" : mre,
+                "learning_rate" : scheduler.get_last_lr()[0],
+                "gradient_norm" : grad_norm(model)
+            })
         scheduler.step()
         print(
             f"Training on {config.device} epoch {i + 1} / {config.n_epochs}. "
