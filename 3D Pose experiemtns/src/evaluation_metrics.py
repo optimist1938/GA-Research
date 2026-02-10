@@ -1,6 +1,7 @@
 import torch
 from image2sphere.so3_utils import rotation_error
 from image2sphere.predictor import I2S
+from model import I2S as I2SFake
 from tqdm import tqdm
 import numpy as np
 
@@ -52,11 +53,21 @@ def calculate_evaluation_metrics(model, loader, config):
     model.to(device)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
-        clas = batch["cls"].to(device)
-        if isinstance(model, I2S):
-            pred_rotmat = model.predict(img, clas).cpu()
+        try:
+            clas = batch["cls"].to(device)
+        except RuntimeError as e:
+            print("Failed to access 'cls' field in dataloader. Error : {}",e)
+        # Жека ты знаешь 
+        # Мужчины не плачут
+        # А слёзы от ветра
+        # А слёзы от пепла
+        if hasattr(model, "predict") and callable(getattr(model, "predict")):
+            try:
+                pred_rotmat = model.predict(img, clas)
+            except TypeError:
+                pred_rotmat = model.predict(img)
         else:
-            pred_rotmat = model(img).cpu()
-        gt_rotmat = batch['rot'].cpu()
+            pred_rotmat = model(img)
+        gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
     return np.hstack(err)
