@@ -53,7 +53,10 @@ def calculate_evaluation_metrics(model, loader, config):
     model.to(device)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
-        clas = batch["cls"].to(device)
+        try:
+            clas = batch["cls"].to(device)
+        except RuntimeError as e:
+            print("Failed to access 'cls' field in dataloader. Error : {}",e)
         # Жека ты знаешь 
         # Мужчины не плачут
         # А слёзы от ветра
