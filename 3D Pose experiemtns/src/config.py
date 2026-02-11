@@ -21,7 +21,7 @@ def create_argparser():
     parser.add_argument("--lmax", type=int, default=6)
     parser.add_argument("--rec_level", type=int, default=3)
     parser.add_argument("--n_mv", type=int, default=8)
-    parser.add_argument("--hidden_dim", type=int, default=32)
+    parser.add_argument("--hidden_dim", type=int, nargs="+", default=[32])
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
