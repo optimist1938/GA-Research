@@ -7,9 +7,10 @@ from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
 from image2sphere.models import ResNet
+from image_encoders import ImageEncoder
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
-from typing import Dict
+from typing import List,Union
 
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
@@ -21,7 +22,7 @@ class I2S(nn.Module):
         lmax: int = 6,
         rec_level: int = 3,
         n_mv: int = 8,
-        hidden_dim: int = 32,
+        hidden_dim: List = [32],
         temperature: float = 1.0,
     ):
         super().__init__()
@@ -90,19 +91,50 @@ class I2S(nn.Module):
         return nearest_rotmat(rot_gt,self.so3_rotmats_cache)
 
 class TralaleroTralala(nn.Module):
-    def __init__(self, algebra, in_features=512, hidden_dim=32, out_features=9):
+    def __init__(
+        self,
+        algebra,
+        in_features: int = 512,
+        hidden_dim: Union[int, List[int]] = 32,
+        out_features: int = 9,
+    ):
         super().__init__()
-        self.fcgp1 = FullyConnectedSteerableGeometricProductLayer(algebra, in_features=in_features, out_features=hidden_dim)
-        self.activ = MVSiLU(algebra, hidden_dim)
-        self.gp1 = SteerableGeometricProductLayer(algebra, hidden_dim)
-        self.gp2 = FullyConnectedSteerableGeometricProductLayer(algebra, hidden_dim, out_features)
+
+        if isinstance(hidden_dim, int):
+            hidden_dims = [hidden_dim]
+        else:
+            hidden_dims = list(hidden_dim)
+
+        if len(hidden_dims) == 0:
+            raise ValueError("hidden_dim must be a non-empty int or List[int]")
+
+        self.blocks = nn.ModuleList()
+        prev = in_features
+
+        for hd in hidden_dims:
+            self.blocks.append(
+                nn.ModuleDict({
+                    "fc": FullyConnectedSteerableGeometricProductLayer(
+                        algebra, in_features=prev, out_features=hd
+                    ),
+                    "act1": MVSiLU(algebra, hd),
+                    "gp": SteerableGeometricProductLayer(algebra, hd),
+                    "act2": MVSiLU(algebra, hd),
+                })
+            )
+            prev = hd
+
+        self.out = FullyConnectedSteerableGeometricProductLayer(
+            algebra, in_features=prev, out_features=out_features
+        )
 
     def forward(self, x):
-        x = self.fcgp1(x)
-        x = self.activ(x)
-        x = self.gp1(x)
-        x = self.activ(x)
-        x = self.gp2(x)
+        for b in self.blocks:
+            x = b["fc"](x)
+            x = b["act1"](x)
+            x = b["gp"](x)
+            x = b["act2"](x)
+        x = self.out(x)
         return x
 
 
