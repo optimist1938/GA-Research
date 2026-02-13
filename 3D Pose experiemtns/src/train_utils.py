@@ -86,7 +86,6 @@ def train_epoch(model, loader, optimizer, criterion, config):
 def validate_epoch(model, loader, criterion, config):
     total_loss = 0.0
     n_objects = 0
-    errors = []
 
     model.eval()
     for data in tqdm(loader):
@@ -97,7 +96,7 @@ def validate_epoch(model, loader, criterion, config):
 
     total_loss /= n_objects
 
-    return total_loss, np.median(np.hstack(errors)).__float__()
+    return total_loss
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
