@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 from pathlib import Path
-from evaluation_metrics import calculate_evaluation_metrics
+from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
 
 
