@@ -53,12 +53,10 @@ def calculate_evaluation_metrics(model, loader, config):
     model.to(device)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
-        
+
         clas = None
         if "cls" in batch:
             clas = batch["cls"].to(device)
-        else:
-            print("Warning: 'cls' field not found in dataloader batch.")
         
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
             if clas is not None:
