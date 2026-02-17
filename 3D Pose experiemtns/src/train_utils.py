@@ -71,8 +71,8 @@ def train_epoch(model, loader, optimizer, criterion, config):
     for data in tqdm(loader):
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.amp.autocast(device_type):
-            loss = _compute_loss(model, data, criterion, config)
+        
+        loss = _compute_loss(model, data, criterion, config)
         
         if scaler is not None:
             scaler.scale(loss).backward()
@@ -102,7 +102,7 @@ def validate_epoch(model, loader, criterion, config):
     for data in tqdm(loader):
         loss = _compute_loss(model, data, criterion, config)
 
-        total_loss += loss.item()
+        total_loss += loss
         n_objects += len(data["img"])
 
     total_loss /= n_objects
