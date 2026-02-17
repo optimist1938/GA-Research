@@ -83,6 +83,7 @@ def main():
             print(f"Failed to load checkpoint. Starting from scratch. Error: {e}")
 
     wandb_log_code(run, Path("."))
+    torch.cuda.empty_cache()
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
 
     checkpoint_path = form_checkpoint(model, optimizer, scheduler, config)

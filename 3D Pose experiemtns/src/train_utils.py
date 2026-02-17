@@ -63,17 +63,24 @@ def _compute_loss(model, data, criterion, config):
 def train_epoch(model, loader, optimizer, criterion, config):
     total_loss = 0.0
     n_objects = 0
-
-    scaler = torch.amp.GradScaler("cuda")
+    device_type = "cuda" if config.device.type == "cuda" else "cpu"
+    
+    scaler = torch.amp.GradScaler(device_type) if device_type == "cuda" else None
+    
     model.train()
     for data in tqdm(loader):
         optimizer.zero_grad(set_to_none=True)
 
-        loss = _compute_loss(model, data, criterion, config)
-
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        with torch.amp.autocast(device_type):
+            loss = _compute_loss(model, data, criterion, config)
+        
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         bs = data["img"].shape[0]
         total_loss += float(loss.detach().item()) * bs
