@@ -53,21 +53,21 @@ def calculate_evaluation_metrics(model, loader, config):
     model.to(device)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
-        try:
+        
+        clas = None
+        if "cls" in batch:
             clas = batch["cls"].to(device)
-        except RuntimeError as e:
-            print("Failed to access 'cls' field in dataloader. Error : {}",e)
-        # Жека ты знаешь 
-        # Мужчины не плачут
-        # А слёзы от ветра
-        # А слёзы от пепла
+        else:
+            print("Warning: 'cls' field not found in dataloader batch.")
+        
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
-            try:
+            if clas is not None:
                 pred_rotmat = model.predict(img, clas)
-            except TypeError:
+            else:
                 pred_rotmat = model.predict(img)
         else:
             pred_rotmat = model(img)
+
         gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
     return np.hstack(err)
