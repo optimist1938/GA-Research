@@ -98,7 +98,7 @@ def validate_epoch(model, loader, criterion, config):
     for data in tqdm(loader):
         loss = _compute_loss(model, data, criterion, config)
 
-        total_loss += loss
+        total_loss += loss.item()
         n_objects += len(data["img"])
 
     total_loss /= n_objects
