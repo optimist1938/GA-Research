@@ -24,7 +24,10 @@ def load_checkpoint(model, optimizer, scheduler, path, device):
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model"])
     optimizer.load_state_dict(checkpoint["optimizer"])
-    scheduler.load_state_dict(checkpoint["scheduler"])
+    try:
+        scheduler.load_state_dict(checkpoint["scheduler"])
+    except:
+        scheduler = scheduler
     return model, optimizer, scheduler
 
 
