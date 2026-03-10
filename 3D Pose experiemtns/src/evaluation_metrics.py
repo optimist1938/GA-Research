@@ -34,7 +34,10 @@ def acc_at(err, theta=15):
     
     :param theta: threshold for angle, degrees 
     '''
-    return (err < theta).item() / len(err)
+    if isinstance(err, torch.Tensor):
+        return (err < theta).float().mean().item()
+    err = np.asarray(err)
+    return float((err < theta).mean())
 
 
 def rotation_error_with_projection(input, target):

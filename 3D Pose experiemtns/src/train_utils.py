@@ -56,11 +56,20 @@ def get_available_device():
 def _compute_loss(model, data, criterion, config):
     img = data["img"].to(config.device)
     targets = data["rot"].to(config.device)
-    outputs = model(img)
+
+    clas = None
+    if "cls" in data:
+        clas = data["cls"].to(config.device)
+
+    if clas is None:
+        outputs = model(img)
+    else:
+        outputs = model(img, clas)
+
     if config.loss == "prob":
         idx = model.get_nearest_idx(targets)
         return criterion(outputs, idx)
-    return criterion(outputs,targets)
+    return criterion(outputs, targets)
 
 
 def train_epoch(model, loader, optimizer, criterion, config):
@@ -105,12 +114,11 @@ def validate_epoch(model, loader, criterion, config):
     for data in tqdm(loader):
         loss = _compute_loss(model, data, criterion, config)
 
-        total_loss += loss
-        n_objects += len(data["img"])
+        bs = data["img"].shape[0]
+        total_loss += float(loss.detach().item()) * bs
+        n_objects += bs
 
-    total_loss /= n_objects
-
-    return total_loss
+    return total_loss / max(n_objects, 1)
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
