@@ -132,4 +132,5 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
         print(
             f"Training on {config.device} epoch {i + 1} / {config.n_epochs}. "
             f"Train loss {train_loss}, val loss {val_loss}"
+            f"Median rotation error {mre}"
         )
