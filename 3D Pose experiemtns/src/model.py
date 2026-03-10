@@ -2,12 +2,10 @@
 
 import torch
 import torch.nn as nn
-import torchvision
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
-from image2sphere.models import ResNet
-from image_encoders import ImageEncoder
+from image_encoders import build_encoder
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import List,Union
@@ -24,6 +22,7 @@ class I2S(nn.Module):
         n_mv: int = 8,
         hidden_dim: List = [32],
         temperature: float = 1.0,
+        encoder_type: str = "resnet",
     ):
         super().__init__()
         self.algebra = algebra
@@ -31,7 +30,7 @@ class I2S(nn.Module):
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
 
-        self.encoder = ResNet()
+        self.encoder = build_encoder(encoder_type)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         enc_channels = getattr(self.encoder, "output_shape", None)[0]
@@ -139,12 +138,13 @@ class TralaleroTralala(nn.Module):
 
 
 class TralaleroCompetitor(nn.Module):
-    def __init__(self, algebra):
+    def __init__(self, algebra, encoder_type: str = "resnet"):
         super().__init__()
         self.algebra = algebra
-        self.backbone = ResNet()
+        self.backbone = build_encoder(encoder_type)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.projective_matrix = nn.Linear(2048, 32 * 8)
+        enc_channels = getattr(self.backbone, "output_shape", None)[0]
+        self.projective_matrix = nn.Linear(enc_channels, 32 * 8)
         self.ga_head = TralaleroTralala(algebra, in_features=8)
 
 
@@ -162,11 +162,12 @@ class TralaleroCompetitor(nn.Module):
 
 
 class MLPBaseline(nn.Module):
-    def __init__(self):
+    def __init__(self, encoder_type: str = "resnet"):
         super().__init__()
-        self.backbone = ResNet()
+        self.backbone = build_encoder(encoder_type)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.linear_head = nn.Linear(in_features=2048, out_features=9)
+        enc_channels = getattr(self.backbone, "output_shape", None)[0]
+        self.linear_head = nn.Linear(in_features=enc_channels, out_features=9)
 
 
     def forward(self, x):

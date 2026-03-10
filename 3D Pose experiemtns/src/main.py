@@ -18,7 +18,7 @@ from src.wandb_utils import (
 
 
 def _make_algebra():
-    return CliffordAlgebra((1, 1, 1, 1, -1))
+    return CliffordAlgebra((1, 1, 1))
 
 
 def instantiate(config):
@@ -28,9 +28,9 @@ def instantiate(config):
     algebra = _make_algebra()
 
     if config.model == "tralalero":
-        model = TralaleroCompetitor(algebra)
+        model = TralaleroCompetitor(algebra, encoder_type=config.encoder)
     elif config.model == "mlp":
-        model = MLPBaseline()
+        model = MLPBaseline(encoder_type=config.encoder)
     elif config.model == "i2s":
         model = I2S(
             algebra=algebra,
@@ -39,6 +39,7 @@ def instantiate(config):
             n_mv=config.n_mv,
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
+            encoder_type=config.encoder,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

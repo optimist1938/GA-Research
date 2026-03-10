@@ -16,6 +16,8 @@ def create_argparser():
                         choices=["tralalero", "mlp", "i2s"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
+    parser.add_argument("--encoder", type=str, default="resnet",
+                        choices=["resnet", "ga"])
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)
