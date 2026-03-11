@@ -50,6 +50,7 @@ def instantiate(config):
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
             encoder_type=config.encoder,
+            ga_pool_hw=tuple(config.ga_pool_hw),
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
