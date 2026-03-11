@@ -100,12 +100,21 @@ class GA_I2S(nn.Module):
         hidden_dim: List = [32],
         temperature: float = 1.0,
         encoder_type: str = "resnet",
+        ga_pool_hw: tuple = (28, 28),
     ):
         super().__init__()
         self.algebra = algebra
         self.lmax = int(lmax)
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
+
+        if len(ga_pool_hw) != 2:
+            raise ValueError("ga_pool_hw must have exactly two elements: (height, width)")
+        self.ga_pool_hw = (int(ga_pool_hw[0]), int(ga_pool_hw[1]))
+        if self.ga_pool_hw[0] <= 0 or self.ga_pool_hw[1] <= 0:
+            raise ValueError("ga_pool_hw values must be positive")
+
+        self.pre_encode_pool = nn.AdaptiveAvgPool2d(self.ga_pool_hw)
 
         # Keep API compatibility with I2S but force canonical GA encoder.
         _ = encoder_type
@@ -116,13 +125,13 @@ class GA_I2S(nn.Module):
             raise ValueError("GA encoder must expose output_shape = (mv_dim, h, w)")
 
         self._mv_dim = int(enc_shape[0])
-        self._n_mv = int(enc_shape[1] * enc_shape[2])
+        _ = n_mv
+        self._n_mv = int(self.ga_pool_hw[0] * self.ga_pool_hw[1])
 
         if self._mv_dim != int(2**algebra.dim):
             raise ValueError(
                 f"Encoder multivector dim ({self._mv_dim}) must match algebra dim ({2**algebra.dim})"
             )
-
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
         self.ga_head = TralaleroTralala(
             algebra=algebra,
@@ -138,9 +147,12 @@ class GA_I2S(nn.Module):
         self.register_buffer("so3_rotmats_cache", o3.angles_to_matrix(*self.so3_xyx), persistent=False)
 
     def forward(self, x: torch.tensor) -> torch.Tensor:
-        mv_grid = self.encoder(x)
+        pooled_x = self.pre_encode_pool(x)
+        mv_grid = self.encoder(pooled_x)
         b, mv_dim, h, w = mv_grid.shape
+
         mv = mv_grid.permute(0, 2, 3, 1).reshape(b, h * w, mv_dim)
+
         coeffs_mv = self.ga_head(mv)
         coeffs = coeffs_mv[..., 0]
         logits = self.logits_on_grid(coeffs)
