@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
@@ -33,6 +33,16 @@ def instantiate(config):
         model = MLPBaseline(encoder_type=config.encoder)
     elif config.model == "i2s":
         model = I2S(
+            algebra=algebra,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            n_mv=config.n_mv,
+            hidden_dim=config.hidden_dim,
+            temperature=config.temperature,
+            encoder_type=config.encoder,
+        )
+    elif config.model == "ga_i2s":
+        model = GA_I2S(
             algebra=algebra,
             lmax=config.lmax,
             rec_level=config.rec_level,
