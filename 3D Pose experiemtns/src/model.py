@@ -89,6 +89,11 @@ class I2S(nn.Module):
     def get_nearest_idx(self, rot_gt : torch.Tensor) :
         return nearest_rotmat(rot_gt,self.so3_rotmats_cache)
 
+    def compute_loss(self, img: torch.Tensor, rot_gt: torch.Tensor, criterion: nn.Module) -> torch.Tensor:
+        logits = self.forward(img)
+        idx = self.get_nearest_idx(rot_gt).long().view(-1)
+        return criterion(logits, idx)
+
 
 class GA_I2S(nn.Module):
     def __init__(
@@ -182,6 +187,11 @@ class GA_I2S(nn.Module):
     @torch.no_grad()
     def get_nearest_idx(self, rot_gt: torch.Tensor):
         return nearest_rotmat(rot_gt, self.so3_rotmats_cache)
+
+    def compute_loss(self, img: torch.Tensor, rot_gt: torch.Tensor, criterion: nn.Module) -> torch.Tensor:
+        logits = self.forward(img)
+        idx = self.get_nearest_idx(rot_gt).long().view(-1)
+        return criterion(logits, idx)
 
 class TralaleroTralala(nn.Module):
     def __init__(

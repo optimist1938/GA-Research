@@ -73,7 +73,9 @@ def _compute_loss(model, data, criterion, config):
         outputs = model(img)
 
     if config.loss == "prob":
-        idx = model.get_nearest_idx(targets)
+        if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
+            return model.compute_loss(img, targets, criterion)
+        idx = model.get_nearest_idx(targets).long().view(-1)
         return criterion(outputs, idx)
     return criterion(outputs, targets)
 
