@@ -67,14 +67,18 @@ def _compute_loss(model, data, criterion, config):
     if "cls" in data:
         clas = data["cls"].to(config.device)
 
+    if config.loss == "prob":
+        if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
+            # Important: avoid a duplicate forward pass before model.compute_loss(),
+            # which can skew BatchNorm running statistics during training.
+            return model.compute_loss(img, targets, criterion)
+
     if clas is not None and _supports_class_argument(model.forward):
         outputs = model(img, clas)
     else:
         outputs = model(img)
 
     if config.loss == "prob":
-        if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
-            return model.compute_loss(img, targets, criterion)
         idx = model.get_nearest_idx(targets).long().view(-1)
         return criterion(outputs, idx)
     return criterion(outputs, targets)
