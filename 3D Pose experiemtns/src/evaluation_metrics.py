@@ -1,4 +1,5 @@
 import torch
+import inspect
 from image2sphere.so3_utils import rotation_error
 from image2sphere.predictor import I2S
 from model import I2S as I2SFake
@@ -47,6 +48,11 @@ def rotation_error_with_projection(input, target):
     return err.cpu().numpy()
 
 
+def _supports_class_argument(method) -> bool:
+    params = list(inspect.signature(method).parameters.values())
+    return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
+
+
 @torch.no_grad()
 def calculate_evaluation_metrics(model, loader, config):
     device = config.device
@@ -62,7 +68,7 @@ def calculate_evaluation_metrics(model, loader, config):
             clas = batch["cls"].to(device)
         
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
-            if clas is not None:
+            if clas is not None and _supports_class_argument(model.predict):
                 pred_rotmat = model.predict(img, clas)
             else:
                 pred_rotmat = model.predict(img)
