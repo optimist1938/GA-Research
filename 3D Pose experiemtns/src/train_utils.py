@@ -1,4 +1,5 @@
 import torch
+import inspect
 from tqdm import tqdm
 from pathlib import Path
 from src.evaluation_metrics import calculate_evaluation_metrics
@@ -53,6 +54,11 @@ def get_available_device():
     return torch.device("cpu")
 
 
+def _supports_class_argument(method) -> bool:
+    params = list(inspect.signature(method).parameters.values())
+    return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
+
+
 def _compute_loss(model, data, criterion, config):
     img = data["img"].to(config.device)
     targets = data["rot"].to(config.device)
@@ -61,10 +67,10 @@ def _compute_loss(model, data, criterion, config):
     if "cls" in data:
         clas = data["cls"].to(config.device)
 
-    if clas is None:
-        outputs = model(img)
-    else:
+    if clas is not None and _supports_class_argument(model.forward):
         outputs = model(img, clas)
+    else:
+        outputs = model(img)
 
     if config.loss == "prob":
         idx = model.get_nearest_idx(targets)
