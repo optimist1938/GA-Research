@@ -72,16 +72,13 @@ def calculate_evaluation_metrics(model, loader, config):
         if "cls" in batch:
             clas = batch["cls"].to(device)
         
-        if clas is not None and _supports_class_argument(unwrapped_model.forward):
-            outputs = model(img, clas)
+        if hasattr(unwrapped_model, "predict") and callable(getattr(unwrapped_model, "predict")):
+            if clas is not None and _supports_class_argument(unwrapped_model.predict):
+                pred_rotmat = unwrapped_model.predict(img, clas)
+            else:
+                pred_rotmat = unwrapped_model.predict(img)
         else:
-            outputs = model(img)
-
-        if config.loss == "prob" and hasattr(unwrapped_model, "so3_rotmats_cache"):
-            idx = torch.argmax(outputs, dim=-1)
-            pred_rotmat = unwrapped_model.so3_rotmats_cache[idx]
-        else:
-            pred_rotmat = outputs
+            pred_rotmat = model(img)
 
         gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
