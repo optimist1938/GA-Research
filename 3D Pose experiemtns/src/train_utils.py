@@ -7,9 +7,8 @@ import numpy as np
 
 
 def form_checkpoint(model, optimizer, scheduler, config):
-    model_to_save = unwrap_model(model)
     checkpoint = {
-        "model": model_to_save.state_dict(),
+        "model": model.state_dict(),
         "scheduler": scheduler.state_dict(),
         "optimizer": optimizer.state_dict(),
         "config": vars(config),
@@ -24,7 +23,7 @@ def load_checkpoint(model, optimizer, scheduler, path, device):
         return model, optimizer, scheduler
 
     checkpoint = torch.load(path, map_location=device)
-    unwrap_model(model).load_state_dict(checkpoint["model"])
+    model.load_state_dict(checkpoint["model"])
     optimizer.load_state_dict(checkpoint["optimizer"])
     try:
         scheduler.load_state_dict(checkpoint["scheduler"])
@@ -60,23 +59,6 @@ def _supports_class_argument(method) -> bool:
     return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
 
 
-def unwrap_model(model):
-    return model.module if isinstance(model, torch.nn.DataParallel) else model
-
-
-def maybe_wrap_model_for_multi_gpu(model, config):
-    use_multi_gpu = getattr(config, "multi_gpu", True)
-    if use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
-        n_devices = min(torch.cuda.device_count(), 2)
-        model = torch.nn.DataParallel(model, device_ids=list(range(n_devices)))
-    return model
-
-
-def _call_model_method(model, method_name: str, *args):
-    target = unwrap_model(model)
-    method = getattr(target, method_name)
-    return method(*args)
-
 def _compute_loss(model, data, criterion, config):
     img = data["img"].to(config.device)
     targets = data["rot"].to(config.device)
@@ -85,21 +67,19 @@ def _compute_loss(model, data, criterion, config):
     if "cls" in data:
         clas = data["cls"].to(config.device)
 
-    unwrapped_model = unwrap_model(model)
-
     if config.loss == "prob":
-        if hasattr(unwrapped_model, "compute_loss") and callable(getattr(unwrapped_model, "compute_loss")):
+        if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
             # Important: avoid a duplicate forward pass before model.compute_loss(),
             # which can skew BatchNorm running statistics during training.
-            return _call_model_method(model, "compute_loss", img, targets, criterion)
+            return model.compute_loss(img, targets, criterion)
 
-    if clas is not None and _supports_class_argument(unwrapped_model.forward):
+    if clas is not None and _supports_class_argument(model.forward):
         outputs = model(img, clas)
     else:
         outputs = model(img)
 
     if config.loss == "prob":
-        idx = _call_model_method(model, "get_nearest_idx", targets).long().view(-1)
+        idx = model.get_nearest_idx(targets).long().view(-1)
         return criterion(outputs, idx)
     return criterion(outputs, targets)
 
