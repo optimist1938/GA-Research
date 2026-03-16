@@ -53,6 +53,10 @@ def _supports_class_argument(method) -> bool:
     return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
 
 
+def unwrap_model(model):
+    return model.module if isinstance(model, torch.nn.DataParallel) else model
+
+
 @torch.no_grad()
 def calculate_evaluation_metrics(model, loader, config):
     device = config.device
@@ -60,6 +64,7 @@ def calculate_evaluation_metrics(model, loader, config):
 
     model.eval()
     model.to(device)
+    unwrapped_model = unwrap_model(model)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
 
@@ -67,11 +72,11 @@ def calculate_evaluation_metrics(model, loader, config):
         if "cls" in batch:
             clas = batch["cls"].to(device)
         
-        if hasattr(model, "predict") and callable(getattr(model, "predict")):
-            if clas is not None and _supports_class_argument(model.predict):
-                pred_rotmat = model.predict(img, clas)
+        if hasattr(unwrapped_model, "predict") and callable(getattr(unwrapped_model, "predict")):
+            if clas is not None and _supports_class_argument(unwrapped_model.predict):
+                pred_rotmat = unwrapped_model.predict(img, clas)
             else:
-                pred_rotmat = model.predict(img)
+                pred_rotmat = unwrapped_model.predict(img)
         else:
             pred_rotmat = model(img)
 

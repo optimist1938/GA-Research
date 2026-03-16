@@ -28,6 +28,7 @@ def create_argparser():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 

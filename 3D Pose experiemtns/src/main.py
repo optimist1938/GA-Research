@@ -7,7 +7,13 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from src.config import create_argparser
 from src.dataset import create_dataloaders
 from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
-from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
+from src.train_utils import (
+    train,
+    form_checkpoint,
+    get_available_device,
+    load_checkpoint,
+    maybe_wrap_model_for_multi_gpu,
+)
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
     wandb_create_run,
@@ -58,6 +64,7 @@ def instantiate(config):
     config.device = get_available_device()
     
     model.to(config.device)
+    model = maybe_wrap_model_for_multi_gpu(model, config)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     warmup_epochs = 5
