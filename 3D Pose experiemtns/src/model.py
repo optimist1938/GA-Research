@@ -13,6 +13,20 @@ from typing import List,Union
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
 
+
+def _move_unregistered_tensors_to_device(module: nn.Module, device: torch.device):
+    for submodule in module.modules():
+        registered_params = set(dict(submodule.named_parameters(recurse=False)).keys())
+        registered_buffers = set(dict(submodule.named_buffers(recurse=False)).keys())
+
+        for attr_name, attr_value in list(submodule.__dict__.items()):
+            if attr_name in registered_params or attr_name in registered_buffers:
+                continue
+            if isinstance(attr_value, torch.Tensor) and attr_value.device != device:
+                setattr(submodule, attr_name, attr_value.to(device))
+
+
+
 class I2S(nn.Module):
     def __init__(
         self,
@@ -232,6 +246,10 @@ class TralaleroTralala(nn.Module):
         )
 
     def forward(self, x):
+        if getattr(self, "_extra_tensors_device", None) != x.device:
+            _move_unregistered_tensors_to_device(self, x.device)
+            self._extra_tensors_device = x.device
+
         for b in self.blocks:
             x = b["fc"](x)
             x = b["act1"](x)
