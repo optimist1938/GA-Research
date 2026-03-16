@@ -87,6 +87,12 @@ def _compute_loss(model, data, criterion, config):
 
     unwrapped_model = unwrap_model(model)
 
+    if config.loss == "prob":
+        if hasattr(unwrapped_model, "compute_loss") and callable(getattr(unwrapped_model, "compute_loss")):
+            # Important: avoid a duplicate forward pass before model.compute_loss(),
+            # which can skew BatchNorm running statistics during training.
+            return _call_model_method(model, "compute_loss", img, targets, criterion)
+
     if clas is not None and _supports_class_argument(unwrapped_model.forward):
         outputs = model(img, clas)
     else:
