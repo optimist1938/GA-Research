@@ -297,19 +297,50 @@ class TralaleroCompetitor(nn.Module):
     def __init__(self, algebra, encoder_type: str = "resnet"):
         super().__init__()
         self.algebra = algebra
-        self.backbone = build_encoder(encoder_type)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        enc_channels = getattr(self.backbone, "output_shape", None)[0]
-        self.projective_matrix = nn.Linear(enc_channels, 32 * 8)
-        self.ga_head = TralaleroTralala(algebra, in_features=8)
+        self._use_ga_backbone = encoder_type in {"ga", "ga_canonical"}
+        self._mv_dim = int(2**algebra.dim)
+        self._n_mv = 8
+
+        if self._use_ga_backbone:
+            self.pre_encode_pool = nn.AdaptiveAvgPool2d((2, 4))
+            self.backbone = build_encoder(encoder_type)
+            self.projective_matrix = None
+        else:
+            self.backbone = build_encoder(encoder_type)
+            self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+            enc_channels = getattr(self.backbone, "output_shape", None)[0]
+            self.projective_matrix = nn.Linear(enc_channels, self._n_mv * self._mv_dim)
+
+        self.ga_head = TralaleroTralala(algebra, in_features=self._n_mv)
+
+    def _ga_to_canonical_mv(self, mv_grid: torch.Tensor) -> torch.Tensor:
+        if mv_grid.shape[1] == self._mv_dim:
+            return mv_grid
+
+        if mv_grid.shape[1] != 6:
+            raise ValueError(
+                f"Unsupported GA encoder channels: expected 6 or {self._mv_dim}, got {mv_grid.shape[1]}"
+            )
+
+        e, e123, e1, e2, e13, e23 = torch.unbind(mv_grid, dim=1)
+        zeros = torch.zeros_like(e)
+        return torch.stack([e, e1, e2, zeros, zeros, e13, e23, e123], dim=1)
 
 
     def forward(self, x):
-        x = self.backbone(x)
-        x = self.avgpool(x)
-        x = x.flatten(1, -1)
-        x = self.projective_matrix(x)
-        x = x.reshape(x.shape[0], -1, 32)
+        if self._use_ga_backbone:
+            pooled_x = self.pre_encode_pool(x)
+            mv_grid = self.backbone(pooled_x)
+            mv_grid = self._ga_to_canonical_mv(mv_grid)
+            b, mv_dim, h, w = mv_grid.shape
+            x = mv_grid.permute(0, 2, 3, 1).reshape(b, h * w, mv_dim)
+        else:
+            x = self.backbone(x)
+            x = self.avgpool(x)
+            x = x.flatten(1, -1)
+            x = self.projective_matrix(x)
+            x = x.reshape(x.shape[0], self._n_mv, self._mv_dim)
+
         x = self.ga_head(x)
         x = x[:, :, 0]
         x = x.reshape(x.shape[0], 3, 3)
