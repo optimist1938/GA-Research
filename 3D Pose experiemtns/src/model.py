@@ -242,18 +242,24 @@ class TralaleroTralala(nn.Module):
 
 
 class TralaleroCompetitor(nn.Module):
-    def __init__(self, algebra, encoder_type: str = "resnet"):
+    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
         super().__init__()
         self.algebra = algebra
         self._use_ga_backbone = encoder_type in {"ga", "ga_canonical"}
         self._mv_dim = int(2**algebra.dim)
-        self._n_mv = 8
 
         if self._use_ga_backbone:
-            self.pre_encode_pool = nn.AdaptiveAvgPool2d((2, 4))
+            if len(ga_pool_hw) != 2:
+                raise ValueError("ga_pool_hw must have exactly two elements: (height, width)")
+            self.ga_pool_hw = (int(ga_pool_hw[0]), int(ga_pool_hw[1]))
+            if self.ga_pool_hw[0] <= 0 or self.ga_pool_hw[1] <= 0:
+                raise ValueError("ga_pool_hw values must be positive")
+
+            self.pre_encode_pool = nn.AdaptiveAvgPool2d(self.ga_pool_hw)
             self.backbone = build_encoder(encoder_type)
-            self.projective_matrix = None
+            self._n_mv = int(self.ga_pool_hw[0] * self.ga_pool_hw[1])
         else:
+            self._n_mv = 8
             self.backbone = build_encoder(encoder_type)
             self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
             enc_channels = getattr(self.backbone, "output_shape", None)[0]

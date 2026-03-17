@@ -28,7 +28,11 @@ def instantiate(config):
     algebra = _make_algebra()
 
     if config.model == "tralalero":
-        model = TralaleroCompetitor(algebra, encoder_type=config.encoder)
+        model = TralaleroCompetitor(
+            algebra,
+            encoder_type=config.encoder,
+            ga_pool_hw=tuple(config.ga_pool_hw),
+        )
     elif config.model == "mlp":
         model = MLPBaseline(encoder_type=config.encoder)
     elif config.model == "i2s":
