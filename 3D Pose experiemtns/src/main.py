@@ -32,6 +32,7 @@ def instantiate(config):
             algebra,
             encoder_type=config.encoder,
             ga_pool_hw=tuple(config.ga_pool_hw),
+            hidden_dim=config.hidden_dim
         )
     elif config.model == "mlp":
         model = MLPBaseline(encoder_type=config.encoder)
