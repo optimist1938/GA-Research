@@ -5,6 +5,8 @@ import torch.nn as nn
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
+from clifford.models.modules.linear import MVLinear
+from clifford.models.modules.mvlayernorm import MVLayerNorm
 from image_encoders import build_encoder
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
@@ -217,17 +219,18 @@ class TralaleroTralala(nn.Module):
         for hd in hidden_dims:
             self.blocks.append(
                 nn.ModuleDict({
-                    "fc": FullyConnectedSteerableGeometricProductLayer(
+                    "fc": MVLinear(
                         algebra, in_features=prev, out_features=hd
                     ),
                     "act1": MVSiLU(algebra, hd),
                     "gp": SteerableGeometricProductLayer(algebra, hd),
+                    "ln": MVLayerNorm(algebra, hd),
                     "act2": MVSiLU(algebra, hd),
                 })
             )
             prev = hd
 
-        self.out = FullyConnectedSteerableGeometricProductLayer(
+        self.out = MVLinear(
             algebra, in_features=prev, out_features=out_features
         )
 
