@@ -234,6 +234,9 @@ class TralaleroTralala(nn.Module):
             algebra, in_features=prev, out_features=out_features
         )
 
+        print(self.blocks)
+        print(self.out)
+
     def forward(self, x):
         for b in self.blocks:
             x = b["fc"](x)
