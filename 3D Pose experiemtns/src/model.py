@@ -239,6 +239,7 @@ class TralaleroTralala(nn.Module):
             x = b["fc"](x)
             x = b["act1"](x)
             x = b["gp"](x)
+            x = b["ln"](x)
             x = b["act2"](x)
         x = self.out(x)
         return x
