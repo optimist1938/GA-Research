@@ -19,7 +19,7 @@ def _drop_path(x, drop_prob: float, training: bool):
         return x
     keep_prob = 1 - drop_prob
     shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = torch.rand(shape, dtype=x.dtype, device=x.device).floor_(keep_prob) / keep_prob
+    random_tensor = (torch.rand(shape, dtype=x.dtype, device=x.device) < keep_prob).float() / keep_prob
     return x * random_tensor
 
 
