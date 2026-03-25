@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import e3nn
+import e3nn.nn
 from e3nn import o3
 
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
