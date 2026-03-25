@@ -4,7 +4,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from src.config import create_argparser
-from src.dataset import create_dataloaders
+from src.dataset import create_dataloaders, create_symsol_dataloaders, create_modelnet10_dataloaders
 from src.cliffordnet_model import CliffordNetI2S
 from src.wandb_utils import wandb_create_run, wandb_log_code, wandb_log_artifact, wandb_finish_run
 from src.train_utils import form_checkpoint, get_available_device
@@ -12,6 +12,16 @@ from src.train_utils import form_checkpoint, get_available_device
 
 def create_argparser_i2s():
     parser = create_argparser()
+    # dataset
+    parser.add_argument("--dataset", type=str, default="modelnet10",
+                        choices=["pascal3d", "symsol", "modelnet10"])
+    parser.add_argument("--symsol_set", type=int, default=1,
+                        help="SYMSOL set number: 1=symsolI, 2=symsolII, etc.")
+    parser.add_argument("--symsol_num_views", type=int, default=50000,
+                        help="Number of training views for SYMSOL")
+    parser.add_argument("--modelnet_limited", action="store_true",
+                        help="Use limited ModelNet10 training set (20 views) instead of full (100 views)")
+    # backbone
     parser.add_argument("--embed_dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=12)
     parser.add_argument("--shifts_n", type=int, default=2,
@@ -19,11 +29,18 @@ def create_argparser_i2s():
     parser.add_argument("--drop_path_rate", type=float, default=0.1)
     parser.add_argument("--img_size", type=int, default=224)
     parser.add_argument("--patch_size", type=int, default=4)
+    # spherical head
     parser.add_argument("--sphere_fdim", type=int, default=512)
     parser.add_argument("--lmax", type=int, default=6)
     parser.add_argument("--f_hidden", type=int, default=8)
     parser.add_argument("--train_grid_rec_level", type=int, default=3)
     parser.add_argument("--eval_grid_rec_level", type=int, default=5)
+    # optimizer (image2sphere defaults)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--lr_step_size", type=int, default=15)
+    parser.add_argument("--lr_decay_rate", type=float, default=0.1)
     return parser
 
 
@@ -85,8 +102,14 @@ def main():
     config = parser.parse_args()
     config.device = get_available_device()
 
-    train_loader, val_loader = create_dataloaders(config)
-    shifts = [1 << i for i in range(config.shifts_n)] # this is used to specify how many bivectors out of binom(embed_dim, 2) we are goiong to compute
+    if config.dataset == "modelnet10":
+        train_loader, val_loader = create_modelnet10_dataloaders(config)
+    elif config.dataset == "symsol":
+        train_loader, val_loader = create_symsol_dataloaders(config)
+    else:
+        train_loader, val_loader = create_dataloaders(config)
+
+    shifts = [1 << i for i in range(config.shifts_n)]
     model = CliffordNetI2S(
         embed_dim=config.embed_dim,
         depth=config.depth,
@@ -100,8 +123,15 @@ def main():
         train_grid_rec_level=config.train_grid_rec_level,
         eval_grid_rec_level=config.eval_grid_rec_level,
     )
-    optimizer = torch.optim.Adam(model.parameters())
-    scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
+    # image2sphere optimizer/scheduler
+    optimizer = torch.optim.SGD(model.parameters(),
+                                lr=config.lr,
+                                momentum=config.momentum,
+                                weight_decay=config.weight_decay,
+                                nesterov=True)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+                                                step_size=config.lr_step_size,
+                                                gamma=config.lr_decay_rate)
     run = wandb_create_run(config.run_name)
     wandb_log_code(run, Path("."))
 
