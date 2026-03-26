@@ -9,7 +9,7 @@ from e3nn import o3
 
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from src.model import TralaleroTralala
-from image2sphere.models import SpatialS2Projector, HarmonicS2Features, SO3Convolution
+from image2sphere.models import SpatialS2Projector, HarmonicS2Projector, HarmonicS2Features, SO3Convolution
 from image2sphere import so3_utils
 
 
@@ -223,12 +223,11 @@ class CliffordNetI2S(nn.Module):
             depth=depth,
             drop_path_rate=drop_path_rate,
         )
-        fmap_size = img_size // patch_size
-        proj_input_shape = [embed_dim, fmap_size, fmap_size]
+        proj_input_shape = [embed_dim, img_size // patch_size, img_size // patch_size]
         if include_class_label:
             proj_input_shape[0] += num_classes
 
-        self.projector = SpatialS2Projector(proj_input_shape, sphere_fdim, lmax)
+        self.projector = HarmonicS2Projector(proj_input_shape, sphere_fdim, lmax)
         self.feature_sphere = HarmonicS2Features(sphere_fdim, lmax, f_out=f_hidden)
 
         irreps_in = so3_utils.s2_irreps(lmax)
