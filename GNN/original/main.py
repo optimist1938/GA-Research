@@ -1,26 +1,28 @@
+import sys
 import torch
 import torch.nn as nn
 import argparse
 from pathlib import Path
 
-from vig import pvig_ti_224_gelu, pvig_s_224_gelu, pvig_b_224_gelu
+
+def _import_vig(vig_repo: str):
+    vig_path = str(Path(vig_repo) / "vig_pytorch")
+    if vig_path not in sys.path:
+        sys.path.insert(0, vig_path)
+    from vig import pvig_ti_224_gelu, pvig_s_224_gelu, pvig_b_224_gelu
+    return pvig_ti_224_gelu, pvig_s_224_gelu, pvig_b_224_gelu
 
 from src.dataset import create_cifar10_dataloaders
 from src.train_utils import get_available_device, form_checkpoint, load_checkpoint, train
 from src.wandb_utils import wandb_create_run, wandb_log_code, wandb_log_artifact, wandb_finish_run
 
 
-VIG_MODELS = {
-    "ti": pvig_ti_224_gelu,
-    "s":  pvig_s_224_gelu,
-    "b":  pvig_b_224_gelu,
-}
-
-
 class VigCifar10(nn.Module):
-    def __init__(self, model_size: str = "ti"):
+    def __init__(self, model_size: str = "ti", vig_repo: str = "./Efficient-AI-Backbones"):
         super().__init__()
-        self.backbone = VIG_MODELS[model_size]()
+        pvig_ti, pvig_s, pvig_b = _import_vig(vig_repo)
+        vig_models = {"ti": pvig_ti, "s": pvig_s, "b": pvig_b}
+        self.backbone = vig_models[model_size]()
         in_features = self.backbone.prediction[1].in_features
         self.backbone.prediction[1] = nn.Linear(in_features, 10)
 
@@ -45,6 +47,9 @@ def create_argparser():
     parser.add_argument("--lr_step_size", type=int, default=50)
     parser.add_argument("--lr_decay_rate", type=float, default=0.1)
     parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--vig_repo", type=str,
+                        default="./Efficient-AI-Backbones",
+                        help="Path to cloned huawei-noah/Efficient-AI-Backbones repo")
     return parser
 
 
@@ -55,7 +60,7 @@ def main():
 
     train_loader, val_loader = create_cifar10_dataloaders(config)
 
-    model = VigCifar10(model_size=config.model_size)
+    model = VigCifar10(model_size=config.model_size, vig_repo=config.vig_repo)
 
     optimizer = torch.optim.SGD(model.parameters(),
                                 lr=config.lr,
