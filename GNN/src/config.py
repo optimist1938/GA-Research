@@ -3,14 +3,14 @@ import argparse
 
 def create_argparser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--n_epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--data_dir", type=str, default="./data",
                         help="Directory to download/load CIFAR-10")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
-    parser.add_argument("--embed_dim", type=int, default=192)
-    parser.add_argument("--n_layers", type=int, default=6)
+    parser.add_argument("--embed_dim", type=int, default=32)
+    parser.add_argument("--n_layers", type=int, default=1)
     parser.add_argument("--k", type=int, default=5,
                         help="Number of nearest neighbours in KNN graph")
     parser.add_argument("--hidden_dim", type=int, default=64,
