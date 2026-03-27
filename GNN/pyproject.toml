@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "gnn-cifar10-exps"
 version = "0.1.0"
-packages = [{ include = "src" }]
+packages = [{ include = "src" }, { include = "original" }]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.15"
@@ -11,6 +11,7 @@ torchvision = "0.24.0"
 tqdm = "4.67.1"
 wandb = "0.23.1"
 clifford = { git = "https://github.com/chagrygoris/clifford-group-equivariant-neural-networks.git" }
+vig = { git = "https://github.com/huawei-noah/Efficient-AI-Backbones.git", subdirectory = "vig_pytorch" }
 
 [build-system]
 requires = ["poetry-core"]
