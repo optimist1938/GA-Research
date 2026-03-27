@@ -23,8 +23,11 @@ class VigCifar10(nn.Module):
         pvig_ti, pvig_s, pvig_b = _import_vig(vig_repo)
         vig_models = {"ti": pvig_ti, "s": pvig_s, "b": pvig_b}
         self.backbone = vig_models[model_size]()
-        in_features = self.backbone.prediction[1].in_features
-        self.backbone.prediction[1] = nn.Linear(in_features, 10)
+        last_idx = max(
+            i for i, m in enumerate(self.backbone.prediction) if isinstance(m, nn.Conv2d)
+        )
+        in_ch = self.backbone.prediction[last_idx].in_channels
+        self.backbone.prediction[last_idx] = nn.Conv2d(in_ch, 10, kernel_size=1, bias=True)
 
     def forward(self, x):
         x = nn.functional.interpolate(x, size=224, mode="bilinear", align_corners=False)
