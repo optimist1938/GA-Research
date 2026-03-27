@@ -106,7 +106,7 @@ class VigCGENNClassifier(nn.Module):
                  patch_size=4, img_size=32, drop_path_rate=0.1):
         super().__init__()
         self.algebra = CliffordAlgebra((1.0, 1.0))
-        self.algebra_dim = self.algebra.dim  
+        self.algebra_dim = 2 ** 2
         self.embed_dim = embed_dim
         self.k = k
 
