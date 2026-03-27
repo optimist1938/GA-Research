@@ -27,26 +27,22 @@ class VigStem(nn.Module):
 
 
 
-def build_knn_graph(B, H, W, k, device):
+def build_knn_graph(H, W, k):
     N = H * W
-    y = torch.arange(H, device=device).float()
-    x = torch.arange(W, device=device).float()
+    y = torch.arange(H).float()
+    x = torch.arange(W).float()
     yy, xx = torch.meshgrid(y, x, indexing='ij')
-    coords = torch.stack([xx.flatten(), yy.flatten()], dim=-1)  
-    coords_norm = coords / torch.tensor([W - 1, H - 1], device=device) * 2 - 1
+    coords = torch.stack([xx.flatten(), yy.flatten()], dim=-1)        
+    coords_norm = coords / torch.tensor([W - 1, H - 1]) * 2 - 1
 
     dist = torch.cdist(coords_norm.unsqueeze(0), coords_norm.unsqueeze(0)).squeeze(0)
     dist.fill_diagonal_(float('inf'))
-    knn_idx = dist.topk(k, dim=-1, largest=False).indices
+    knn_idx = dist.topk(k, dim=-1, largest=False).indices               
 
-    rows = torch.arange(N, device=device).unsqueeze(1).expand(N, k).reshape(-1)
+    rows = torch.arange(N).unsqueeze(1).expand(N, k).reshape(-1)      
     cols = knn_idx.reshape(-1)
 
-    batch_offset = torch.arange(B, device=device).unsqueeze(1) * N
-    rows_b = (rows.unsqueeze(0) + batch_offset).reshape(-1)
-    cols_b = (cols.unsqueeze(0) + batch_offset).reshape(-1)
-
-    return torch.stack([rows_b, cols_b], dim=0), coords_norm  
+    return rows, cols, coords_norm                                        
 
 
 class CEMLP(nn.Module):
@@ -115,6 +111,11 @@ class VigCGENNClassifier(nn.Module):
         self.pos_embed = nn.Parameter(
             torch.zeros(1, embed_dim, self.fmap_size, self.fmap_size))
 
+        rows, cols, coords_norm = build_knn_graph(self.fmap_size, self.fmap_size, k)
+        self.register_buffer("graph_rows", rows)         
+        self.register_buffer("graph_cols", cols)         
+        self.register_buffer("coords_norm", coords_norm) 
+
         self.input_proj = MVLinear(self.algebra, embed_dim + 1, hidden_dim, subspaces=False)
 
         self.layers = nn.ModuleList([
@@ -131,25 +132,27 @@ class VigCGENNClassifier(nn.Module):
 
     def forward(self, x):
         B = x.shape[0]
-        H = W = self.fmap_size
-        N = H * W
+        N = self.fmap_size * self.fmap_size
 
-        x = self.stem(x) + self.pos_embed                         
+        x = self.stem(x) + self.pos_embed                            
 
-        edge_index, coords_norm = build_knn_graph(B, H, W, self.k, x.device)
+        offset = torch.arange(B, device=x.device).unsqueeze(1) * N   
+        rows_b = (self.graph_rows.unsqueeze(0) + offset).reshape(-1)
+        cols_b = (self.graph_cols.unsqueeze(0) + offset).reshape(-1)
+        edge_index = torch.stack([rows_b, cols_b], dim=0)
 
-        feat = x.permute(0, 2, 3, 1).reshape(B * N, self.embed_dim) 
+        feat = x.permute(0, 2, 3, 1).reshape(B * N, self.embed_dim)   
 
         h = torch.zeros(B * N, self.embed_dim + 1, self.algebra_dim, device=x.device)
-        h[:, :self.embed_dim, 0] = feat                              
-        coords_batched = coords_norm.unsqueeze(0).expand(B, -1, -1).reshape(B * N, 2)
-        h[:, self.embed_dim, 1:3] = coords_batched               
+        h[:, :self.embed_dim, 0] = feat
+        coords_batched = self.coords_norm.unsqueeze(0).expand(B, -1, -1).reshape(B * N, 2)
+        h[:, self.embed_dim, 1:3] = coords_batched
 
-        h = self.input_proj(h)                                       
+        h = self.input_proj(h)
         for layer in self.layers:
             h = layer(h, edge_index)
 
-        h = self.output_proj(h)[..., 0]                              
+        h = self.output_proj(h)[..., 0]
         h = self.output_norm(h)
-        h = h.reshape(B, N, self.embed_dim).mean(dim=1)              
-        return self.classifier(h)                                    
+        h = h.reshape(B, N, self.embed_dim).mean(dim=1)
+        return self.classifier(h)
