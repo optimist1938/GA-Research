@@ -36,7 +36,7 @@ class VigCifar10(nn.Module):
 
 def create_argparser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--n_epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--data_dir", type=str, default="./data")
     parser.add_argument("--run_name", type=str, default=None)
