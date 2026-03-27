@@ -9,8 +9,8 @@ def _import_vig(vig_repo: str):
     vig_path = str(Path(vig_repo) / "vig_pytorch")
     if vig_path not in sys.path:
         sys.path.insert(0, vig_path)
-    from vig import pvig_ti_224_gelu, pvig_s_224_gelu, pvig_b_224_gelu
-    return pvig_ti_224_gelu, pvig_s_224_gelu, pvig_b_224_gelu
+    from vig import vig_ti_224_gelu, vig_s_224_gelu, vig_b_224_gelu
+    return vig_ti_224_gelu, vig_s_224_gelu, vig_b_224_gelu
 
 from src.dataset import create_cifar10_dataloaders
 from src.train_utils import get_available_device, form_checkpoint, load_checkpoint, train
