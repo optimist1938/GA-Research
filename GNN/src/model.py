@@ -46,41 +46,30 @@ def build_knn_graph(H, W, k):
 
 
 class CEMLP(nn.Module):
-    def __init__(self, algebra, in_features, hidden_features, out_features, n_layers=1):
+    def __init__(self, algebra, n_features, n_layers=2):
         super().__init__()
-        layers = []
-        for i in range(n_layers - 1):
-            layers.append(nn.Sequential(
-                # MVLinear(algebra, in_features, hidden_features),
-                # MVSiLU(algebra, hidden_features),
-                SteerableGeometricProductLayer(algebra, hidden_features),
-                # MVLayerNorm(algebra, hidden_features),
-            ))
-            in_features = hidden_features
-        layers.append(nn.Sequential(
-            # MVLinear(algebra, in_features, out_features),
-            # MVSiLU(algebra, out_features),
-            SteerableGeometricProductLayer(algebra, out_features),
-            # MVLayerNorm(algebra, out_features),
-        ))
-        self.layers = nn.Sequential(*layers)
+        self.layers = nn.Sequential(*[
+            SteerableGeometricProductLayer(algebra, n_features)
+            for _ in range(n_layers)
+        ])
 
     def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return x
+        return self.layers(x)
 
 
 class EGCL(nn.Module):
-    def __init__(self, algebra, in_features, hidden_features, out_features, residual=True):
+    def __init__(self, algebra, in_features, out_features, residual=True):
         super().__init__()
         self.residual = residual
-        self.edge_model = CEMLP(algebra, in_features, hidden_features, out_features)
-        self.node_model = CEMLP(algebra, in_features + out_features, hidden_features, out_features)
+        # MVLinear handles dimension changes; CEMLP only does grade mixing
+        self.edge_proj = MVLinear(algebra, in_features, out_features)
+        self.edge_model = CEMLP(algebra, out_features)
+        self.node_proj = MVLinear(algebra, in_features + out_features, out_features)
+        self.node_model = CEMLP(algebra, out_features)
 
     def forward(self, h, edge_index):
         rows, cols = edge_index
-        h_msg = self.edge_model(h[rows] - h[cols])
+        h_msg = self.edge_model(self.edge_proj(h[rows] - h[cols]))
         N = h.shape[0]
         agg = torch.zeros(N, *h_msg.shape[1:], device=h.device)
         count = torch.zeros(N, 1, 1, device=h.device)
@@ -88,7 +77,7 @@ class EGCL(nn.Module):
         count.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand(len(rows), 1, 1),
                            torch.ones(len(rows), 1, 1, device=h.device))
         agg = agg / count.clamp(min=1)
-        out = self.node_model(torch.cat([h, agg], dim=1))
+        out = self.node_model(self.node_proj(torch.cat([h, agg], dim=1)))
         if self.residual:
             out = h + out
         return out
@@ -122,7 +111,7 @@ class VigCGENNClassifier(nn.Module):
         ) # downsampling + performing blade mixing operation 
 
         self.layers = nn.ModuleList([
-            EGCL(self.algebra, hidden_dim, hidden_dim, hidden_dim, residual=(i > 0))
+            EGCL(self.algebra, hidden_dim, hidden_dim, residual=(i > 0))
             for i in range(n_layers)
         ])
 
