@@ -24,11 +24,22 @@ class VigCifar10(nn.Module):
         vig_models = {"ti": pvig_ti, "s": pvig_s, "b": pvig_b}
         self.backbone = vig_models[model_size]()
         self._adapt_stem_for_small_images()
+        self._resize_pos_embed(img_size=32)
         last_idx = max(
             i for i, m in enumerate(self.backbone.prediction) if isinstance(m, nn.Conv2d)
         )
         in_ch = self.backbone.prediction[last_idx].in_channels
         self.backbone.prediction[last_idx] = nn.Conv2d(in_ch, 10, kernel_size=1, bias=True)
+
+    def _resize_pos_embed(self, img_size=32):
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, img_size, img_size)
+            fmap = self.backbone.stem(dummy)       
+            _, _, H, W = fmap.shape
+        resized = nn.functional.interpolate(
+            self.backbone.pos_embed.data, size=(H, W), mode='bilinear', align_corners=False
+        )
+        self.backbone.pos_embed = nn.Parameter(resized)
 
     def _adapt_stem_for_small_images(self):
         stem = self.backbone.stem
