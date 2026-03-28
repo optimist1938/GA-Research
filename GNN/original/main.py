@@ -46,6 +46,7 @@ class VigCifar10(nn.Module):
         n_patches = self.backbone.pos_embed.shape[2] * self.backbone.pos_embed.shape[3]
         for m in self.backbone.modules():
             if hasattr(m, 'k') and hasattr(m, 'dilation'):
+                m.k = min(m.k, n_patches - 1)
                 m.dilation = max(1, (n_patches - 1) // m.k)
 
     def _adapt_stem_for_small_images(self):
