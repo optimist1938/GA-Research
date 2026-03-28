@@ -84,7 +84,7 @@ class EGCL(nn.Module):
         N = h.shape[0]
         agg = torch.zeros(N, *h_msg.shape[1:], device=h.device)
         count = torch.zeros(N, 1, 1, device=h.device)
-        agg.scatte/r_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand_as(h_msg), h_msg)
+        agg.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand_as(h_msg), h_msg)
         count.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand(len(rows), 1, 1),
                            torch.ones(len(rows), 1, 1, device=h.device))
         agg = agg / count.clamp(min=1)
