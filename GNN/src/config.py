@@ -13,7 +13,7 @@ def create_argparser():
     parser.add_argument("--n_layers", type=int, default=1)
     parser.add_argument("--k", type=int, default=5,
                         help="Number of nearest neighbours in KNN graph")
-    parser.add_argument("--hidden_dim", type=int, default=64,
+    parser.add_argument("--hidden_dim", type=int, default=16,
                         help="CGENN hidden multivector dimension")
     parser.add_argument("--img_size", type=int, default=32,
                         help="Input image size (CIFAR-10 default: 32)")

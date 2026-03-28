@@ -63,21 +63,22 @@ class EGCL(nn.Module):
         self.residual = residual
         # MVLinear handles dimension changes; CEMLP only does grade mixing
         self.edge_proj = MVLinear(algebra, in_features, out_features)
-        self.edge_model = CEMLP(algebra, out_features)
+        self.edge_act = MVSiLU(algebra, in_features, out_features)
         self.node_proj = MVLinear(algebra, in_features + out_features, out_features)
-        self.node_model = CEMLP(algebra, out_features)
+        self.node_gp = SteerableGeometricProductLayer(algebra, out_features)
+        self.node_act = MVSiLU(algebra, out_features)
 
     def forward(self, h, edge_index):
         rows, cols = edge_index
-        h_msg = self.edge_model(self.edge_proj(h[rows] - h[cols]))
+        h_msg = self.edge_act(self.edge_proj(h[rows] - h[cols]))
         N = h.shape[0]
         agg = torch.zeros(N, *h_msg.shape[1:], device=h.device)
         count = torch.zeros(N, 1, 1, device=h.device)
         agg.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand_as(h_msg), h_msg)
         count.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand(len(rows), 1, 1),
                            torch.ones(len(rows), 1, 1, device=h.device))
-        agg = agg / count.clamp(min=1)
-        out = self.node_model(self.node_proj(torch.cat([h, agg], dim=1)))
+        node_update = self.node_proj(torch.cat([h, agg], dim=1))
+        out = self.node_act(self.node_gp(node_update))
         if self.residual:
             out = h + out
         return out
