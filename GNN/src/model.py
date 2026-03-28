@@ -46,22 +46,22 @@ def build_knn_graph(H, W, k):
 
 
 class CEMLP(nn.Module):
-    def __init__(self, algebra, in_features, hidden_features, out_features, n_layers=2):
+    def __init__(self, algebra, in_features, hidden_features, out_features, n_layers=1):
         super().__init__()
         layers = []
         for i in range(n_layers - 1):
             layers.append(nn.Sequential(
-                MVLinear(algebra, in_features, hidden_features),
-                MVSiLU(algebra, hidden_features),
+                # MVLinear(algebra, in_features, hidden_features),
+                # MVSiLU(algebra, hidden_features),
                 SteerableGeometricProductLayer(algebra, hidden_features),
-                MVLayerNorm(algebra, hidden_features),
+                # MVLayerNorm(algebra, hidden_features),
             ))
             in_features = hidden_features
         layers.append(nn.Sequential(
-            MVLinear(algebra, in_features, out_features),
-            MVSiLU(algebra, out_features),
+            # MVLinear(algebra, in_features, out_features),
+            # MVSiLU(algebra, out_features),
             SteerableGeometricProductLayer(algebra, out_features),
-            MVLayerNorm(algebra, out_features),
+            # MVLayerNorm(algebra, out_features),
         ))
         self.layers = nn.Sequential(*layers)
 
@@ -84,7 +84,7 @@ class EGCL(nn.Module):
         N = h.shape[0]
         agg = torch.zeros(N, *h_msg.shape[1:], device=h.device)
         count = torch.zeros(N, 1, 1, device=h.device)
-        agg.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand_as(h_msg), h_msg)
+        agg.scatte/r_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand_as(h_msg), h_msg)
         count.scatter_add_(0, rows.unsqueeze(-1).unsqueeze(-1).expand(len(rows), 1, 1),
                            torch.ones(len(rows), 1, 1, device=h.device))
         agg = agg / count.clamp(min=1)
@@ -116,7 +116,10 @@ class VigCGENNClassifier(nn.Module):
         self.register_buffer("graph_cols", cols)         
         self.register_buffer("coords_norm", coords_norm) 
 
-        self.input_proj = MVLinear(self.algebra, embed_dim + 1, hidden_dim, subspaces=False)
+        self.input_proj = nn.Sequential(
+            MVLinear(self.algebra, embed_dim + 1, hidden_dim, subspaces=False), 
+            SteerableGeometricProductLayer(self.algebra, hidden_dim)
+        ) # downsampling + performing blade mixing operation 
 
         self.layers = nn.ModuleList([
             EGCL(self.algebra, hidden_dim, hidden_dim, hidden_dim, residual=(i > 0))
