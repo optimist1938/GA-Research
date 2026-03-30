@@ -56,6 +56,24 @@ class CliffordHead(nn.Module):
 
 
 
+class CliffordHeadScalar(nn.Module):
+    def __init__(self, in_features, hidden):
+        super().__init__()
+        self.algebra = CliffordAlgebra((1.0, 1.0))
+        self.hidden = hidden
+
+        self.embed   = nn.Linear(in_features, hidden * 4)
+        self.gp      = SteerableGeometricProductLayer(self.algebra, hidden)
+        self.readout = nn.Linear(hidden, 2)       
+
+    def forward(self, x):
+        B = x.shape[0]
+        h = self.embed(x).reshape(B, self.hidden, 4)
+        h = self.gp(h)                           
+        scalars = h[:, :, 0]                     
+        return self.readout(scalars)
+
+
 class RotationNet(nn.Module):
     def __init__(self, cnn_channels=16, head='clifford', head_hidden=8):
         super().__init__()
@@ -63,6 +81,9 @@ class RotationNet(nn.Module):
 
         if head == 'clifford':
             self.head = CliffordHead(cnn_channels, hidden=head_hidden)
+
+        elif head == 'clifford_scalar':
+            self.head = CliffordHeadScalar(cnn_channels, hidden=head_hidden)
 
         elif head == 'mlp':
             clf_params = sum(
