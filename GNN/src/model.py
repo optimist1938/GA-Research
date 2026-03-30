@@ -61,7 +61,6 @@ class EGCL(nn.Module):
     def __init__(self, algebra, in_features, out_features, residual=True):
         super().__init__()
         self.residual = residual
-        # MVLinear handles dimension changes; CEMLP only does grade mixing
         self.edge_proj = MVLinear(algebra, in_features, out_features)
         self.edge_act = MVSiLU(algebra, out_features)
         self.node_proj = MVLinear(algebra, in_features + out_features, out_features)

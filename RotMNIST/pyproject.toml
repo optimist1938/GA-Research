@@ -1,0 +1,15 @@
+name = "rotmnist-exps"
+version = "0.1.0"
+packages = [{ include = "src" }]
+python = ">=3.11,<3.15"
+
+torch = "2.9.0"
+torchvision = "0.24.0"
+tqdm = "4.67.1"
+wandb = "0.23.1"
+Pillow = "*"
+numpy = "*"
+clifford = { git = "https://github.com/chagrygoris/clifford-group-equivariant-neural-networks.git" }
+
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
