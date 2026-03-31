@@ -105,13 +105,46 @@ class CliffordHeadSpatial(nn.Module):
         return self.readout(mv[:, :, 1:3].norm(dim=-1))  
 
 
+class CliffordHeadPos(nn.Module):
+    def __init__(self, n_channels):
+        super().__init__()
+        self.algebra = CliffordAlgebra((1.0, 1.0))
+        self.gp      = SteerableGeometricProductLayer(self.algebra, n_channels)
+        self.readout = nn.Linear(n_channels, 2)
+
+    def forward(self, feat):
+        B, C, H, W = feat.shape
+
+        xs = torch.linspace(-1, 1, W, device=feat.device)
+        ys = torch.linspace(-1, 1, H, device=feat.device)
+        gy, gx = torch.meshgrid(ys, xs, indexing='ij')  
+
+        scalars = feat.permute(0, 2, 3, 1).reshape(B, H * W, C)
+
+        e1 = gx.reshape(H * W)  
+        e2 = gy.reshape(H * W)
+
+        mv = torch.zeros(B, H * W, C, 4, device=feat.device)
+        mv[:, :, :, 0] = scalars
+        mv[:, :, :, 1] = e1[None, :, None]  
+        mv[:, :, :, 2] = e2[None, :, None]
+
+        mv = mv.reshape(B * H * W, C, 4)
+        mv = self.gp(mv)                                    
+        mv = mv.reshape(B, H * W, C, 4)
+
+        mv = mv.mean(dim=1)                                   
+        return self.readout(mv[:, :, 1:3].norm(dim=-1))    
+
+
 class RotationNet(nn.Module):
     def __init__(self, cnn_channels=16, head='clifford', head_hidden=8):
         super().__init__()
 
-        if head == 'clifford_spatial':
+        if head in ('clifford_spatial', 'clifford_pos'):
             self.cnn  = SmallCNN(out_channels=cnn_channels, pool=False)
-            self.head = CliffordHeadSpatial(cnn_channels)
+            self.head = CliffordHeadSpatial(cnn_channels) if head == 'clifford_spatial' \
+                        else CliffordHeadPos(cnn_channels)
         else:
             self.cnn = SmallCNN(out_channels=cnn_channels, pool=True)
 
