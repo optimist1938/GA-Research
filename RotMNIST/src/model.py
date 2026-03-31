@@ -89,12 +89,12 @@ class CliffordHeadSpatial(nn.Module):
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 MVLinear(self.algebra, n_channels, n_channels),
-                MVSiLU(self.algebra, n_channels),
+                # MVSiLU(self.algebra, n_channels),
                 SteerableGeometricProductLayer(self.algebra, n_channels),
             ),
             nn.Sequential(
                 MVLinear(self.algebra, n_channels, n_channels),
-                MVSiLU(self.algebra, n_channels),
+                # MVSiLU(self.algebra, n_channels),
                 SteerableGeometricProductLayer(self.algebra, n_channels),
             ),
         ])
