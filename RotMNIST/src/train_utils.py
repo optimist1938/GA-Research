@@ -78,8 +78,12 @@ GRADE_NAMES = ["scalar\n(e0)", "e1", "e2", "bivector\n(e12)"]
 
 
 @torch.no_grad()
-def log_embedding_viz(model, loader, device, epoch):
+def log_embedding_viz(model, loader, device, run, epoch):
+    import wandb
     head = model.head
+    if run is None or not (hasattr(head, 'embed') and hasattr(head, 'gp')):
+        return
+
     captured = {}
 
     def hook_pre(module, inp, out):
@@ -98,8 +102,8 @@ def log_embedding_viz(model, loader, device, epoch):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle(f'Epoch {epoch}', fontsize=13)
 
-    pre  = captured['pre_gp'].pow(2).mean(dim=(0, 1)).numpy()   # (4,)
-    post = captured['post_gp'].pow(2).mean(dim=(0, 1)).numpy()  # (4,)
+    pre  = captured['pre_gp'].pow(2).mean(dim=(0, 1)).numpy()
+    post = captured['post_gp'].pow(2).mean(dim=(0, 1)).numpy()
     pre  = pre  / pre.sum().clip(1e-8)
     post = post / post.sum().clip(1e-8)
 
@@ -112,9 +116,10 @@ def log_embedding_viz(model, loader, device, epoch):
     ax.set_ylabel('fraction of total energy')
     ax.set_title('Grade energy distribution')
     ax.legend()
+
     W = head.embed.weight.detach().cpu()
     hidden = W.shape[0] // 4
-    W = W.reshape(hidden, 4, -1).norm(dim=-1).numpy()   
+    W = W.reshape(hidden, 4, -1).norm(dim=-1).numpy()
     W = W / W.max().clip(1e-8)
 
     ax = axes[1]
@@ -126,7 +131,8 @@ def log_embedding_viz(model, loader, device, epoch):
     plt.colorbar(im, ax=ax)
 
     fig.tight_layout()
-    plt.show()
+    run.log({"viz/embedding": wandb.Image(fig)}, step=epoch)
+    plt.close(fig)
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
@@ -148,4 +154,4 @@ def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
             f"loss {train_loss:.4f}/{val_loss:.4f}  "
             f"angle_err {train_err:.1f}°/{val_err:.1f}°"
         )
-        log_embedding_viz(model, val_loader, config.device, epoch)
+        log_embedding_viz(model, val_loader, config.device, run, epoch)
