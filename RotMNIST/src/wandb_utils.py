@@ -3,9 +3,9 @@ from pathlib import Path
 
 
 def wandb_create_run(run_name):
-    if not run_name:
-        return None
-    return wandb.init(project="Tralalero", name=run_name)
+    run = wandb.init(project="Tralalero", name=run_name or None)
+    print(f"wandb run: {run.url}")
+    return run
 
 
 def wandb_finish_run(run):
