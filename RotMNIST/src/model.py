@@ -60,6 +60,28 @@ class CliffordHead(nn.Module):
         return self.readout(h.reshape(B, -1))
 
 
+class CliffordHeadRotor(nn.Module):
+
+    def __init__(self, in_features, hidden):
+        super().__init__()
+        self.algebra = CliffordAlgebra((1.0, 1.0))
+        self.hidden = hidden
+
+        self.embed   = nn.Linear(in_features, hidden * 4)
+        self.gp      = SteerableGeometricProductLayer(self.algebra, hidden)
+        self.readout = nn.Linear(hidden * 2, 2)  
+
+    def forward(self, x):
+        B = x.shape[0]
+        h = self.embed(x).reshape(B, self.hidden, 4)
+        h = self.gp(h)                                         
+        rotor_feats = torch.cat([h[:, :, 0], h[:, :, 3]], dim=-1)  
+        r = self.readout(rotor_feats)                         
+        r = r / r.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        a, b = r[:, 0], r[:, 1]
+        return torch.stack([a**2 - b**2, 2 * a * b], dim=-1)   
+
+
 class CliffordHeadScalar(nn.Module):
     def __init__(self, in_features, hidden, mode='scalar'):
         super().__init__()
@@ -165,6 +187,9 @@ class RotationNet(nn.Module):
 
             if head == 'clifford':
                 self.head = CliffordHead(cnn_channels, hidden=head_hidden)
+
+            elif head == 'clifford_rotor':
+                self.head = CliffordHeadRotor(cnn_channels, hidden=head_hidden)
 
             elif head == 'clifford_scalar':
                 self.head = CliffordHeadScalar(cnn_channels, hidden=head_hidden, mode='scalar')

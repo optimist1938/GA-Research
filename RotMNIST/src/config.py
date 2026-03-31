@@ -9,7 +9,7 @@ def create_argparser():
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
     parser.add_argument("--head", type=str, default="mlp",
-                        choices=["mlp", "clifford", "clifford_scalar", "clifford_vnorm", "clifford_spatial", "clifford_pos"])
+                        choices=["mlp", "clifford", "clifford_rotor", "clifford_scalar", "clifford_vnorm", "clifford_spatial", "clifford_pos"])
     parser.add_argument("--cnn_channels", type=int, default=16)
     parser.add_argument("--head_hidden", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
