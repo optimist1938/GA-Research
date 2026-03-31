@@ -33,6 +33,7 @@ def main():
             model, optimizer, scheduler, config.checkpoint, config.device)
 
     run = wandb_create_run(config.run_name)
+    pint("wandb")
     wandb_log_code(run, Path("."))
 
     train(model, train_loader, val_loader, optimizer, scheduler, run, config)
