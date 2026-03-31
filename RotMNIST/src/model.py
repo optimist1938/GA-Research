@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from clifford.models.modules.gp import SteerableGeometricProductLayer
+from clifford.models.modules.linear import MVLinear
 
 
 
@@ -63,7 +64,7 @@ class CliffordHeadScalar(nn.Module):
         super().__init__()
         self.algebra = CliffordAlgebra((1.0, 1.0))
         self.hidden = hidden
-        self.mode = mode  # 'scalar' | 'vnorm'
+        self.mode = mode 
 
         self.embed   = nn.Linear(in_features, hidden * 4)
         self.gp      = SteerableGeometricProductLayer(self.algebra, hidden)
@@ -85,31 +86,32 @@ class CliffordHeadSpatial(nn.Module):
         super().__init__()
         self.algebra = CliffordAlgebra((1.0, 1.0))
         self.gp      = SteerableGeometricProductLayer(self.algebra, n_channels)
-        self.readout = nn.Linear(n_channels, 2)
+        self.readout = MVLinear(self.algebra, n_channels, 1)
 
     def forward(self, feat):
         B, C, H, W = feat.shape
 
         xs = torch.linspace(-1, 1, W, device=feat.device)
         ys = torch.linspace(-1, 1, H, device=feat.device)
-        gy, gx = torch.meshgrid(ys, xs, indexing='ij')  
+        gy, gx = torch.meshgrid(ys, xs, indexing='ij')
 
         mv = torch.stack([
-            feat.mean(dim=(-2, -1)),                  
-            (feat * gx).mean(dim=(-2, -1)),         
-            (feat * gy).mean(dim=(-2, -1)),            
-            torch.zeros(B, C, device=feat.device),   
-        ], dim=-1)                                     
+            feat.mean(dim=(-2, -1)),
+            (feat * gx).mean(dim=(-2, -1)),
+            (feat * gy).mean(dim=(-2, -1)),
+            torch.zeros(B, C, device=feat.device),
+        ], dim=-1)                                    
 
-        mv = self.gp(mv)                              
-        return self.readout(mv[:, :, 1:3].norm(dim=-1))  
+        mv = self.gp(mv)                               
+        mv = self.readout(mv)                        
+        return mv[:, 0, 1:3]                     
 
 
 class CliffordHeadPos(nn.Module):
     def __init__(self, n_channels):
         super().__init__()
         self.algebra = CliffordAlgebra((1.0, 1.0))
-        self.gp      = SteerableGeometricProductLayer(self.algebra, n_channels)
+        self.gp = SteerableGeometricProductLayer(self.algebra, n_channels)
         self.readout = nn.Linear(n_channels, 2)
 
     def forward(self, feat):
