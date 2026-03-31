@@ -81,7 +81,12 @@ GRADE_NAMES = ["scalar\n(e0)", "e1", "e2", "bivector\n(e12)"]
 def log_embedding_viz(model, loader, device, run, epoch):
     import wandb
     head = model.head
-    if run is None or not (hasattr(head, 'embed') and hasattr(head, 'gp')):
+    if run is None or not hasattr(head, 'embed'):
+        return
+    # gp1/gp2 for CliffordHead (two-layer block), gp for others
+    gp_first = getattr(head, 'gp1', None) or getattr(head, 'gp', None)
+    gp_last  = getattr(head, 'gp2', None) or getattr(head, 'gp', None)
+    if gp_first is None:
         return
 
     captured = {}
@@ -92,8 +97,8 @@ def log_embedding_viz(model, loader, device, run, epoch):
     def hook_post(module, inp, out):
         captured['post_gp'] = out.detach().cpu()
 
-    h1 = head.gp.register_forward_hook(hook_pre)
-    h2 = head.gp.register_forward_hook(hook_post)
+    h1 = gp_first.register_forward_hook(hook_pre)
+    h2 = gp_last.register_forward_hook(hook_post)
     model.eval()
     model(next(iter(loader))[0].to(device))
     h1.remove()

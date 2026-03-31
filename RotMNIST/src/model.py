@@ -50,13 +50,17 @@ class CliffordHead(nn.Module):
         self.hidden = hidden
 
         self.embed   = nn.Linear(in_features, hidden * 4)
-        self.gp      = SteerableGeometricProductLayer(self.algebra, hidden)
+        self.gp1     = SteerableGeometricProductLayer(self.algebra, hidden)
+        self.mv_lin  = MVLinear(self.algebra, hidden, hidden)
+        self.gp2     = SteerableGeometricProductLayer(self.algebra, hidden)
         self.readout = nn.Linear(hidden * 4, 2)
 
     def forward(self, x):
         B = x.shape[0]
         h = self.embed(x).reshape(B, self.hidden, 4)
-        h = self.gp(h)
+        h = self.gp1(h)
+        h = self.mv_lin(h)
+        h = self.gp2(h)
         return self.readout(h.reshape(B, -1))
 
 
