@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 from pathlib import Path
 from tqdm import tqdm
 
@@ -73,44 +74,59 @@ def val_epoch(model, loader, device):
     return total_loss / n, total_err / n
 
 
-GRADE_NAMES = ["scalar (e0)", "e1", "e2", "bivector (e12)"]
+GRADE_NAMES = ["scalar\n(e0)", "e1", "e2", "bivector\n(e12)"]
 
 
 @torch.no_grad()
-def log_grade_energy(model, loader, device, run, epoch):
+def log_embedding_viz(model, loader, device, epoch):
     head = model.head
     captured = {}
-    def hook_pre_gp(module, inp, out):
+
+    def hook_pre(module, inp, out):
         captured['pre_gp'] = inp[0].detach().cpu()
 
-    def hook_post_gp(module, inp, out):
+    def hook_post(module, inp, out):
         captured['post_gp'] = out.detach().cpu()
 
-    h1 = head.gp.register_forward_hook(hook_pre_gp)
-    h2 = head.gp.register_forward_hook(hook_post_gp)
-
-    imgs, _ = next(iter(loader))
+    h1 = head.gp.register_forward_hook(hook_pre)
+    h2 = head.gp.register_forward_hook(hook_post)
     model.eval()
-    model(imgs.to(device))
-
+    model(next(iter(loader))[0].to(device))
     h1.remove()
     h2.remove()
 
-    logs = {}
-    for tag, mv in captured.items():
-        energy = mv.pow(2).mean(dim=(0, 1))  
-        energy = energy / energy.sum().clamp(min=1e-8) 
-        for k, name in enumerate(GRADE_NAMES):
-            logs[f"grade_energy/{tag}/{name}"] = energy[k].item()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig.suptitle(f'Epoch {epoch}', fontsize=13)
 
-    if run is not None:
-        run.log(logs, step=epoch)
+    pre  = captured['pre_gp'].pow(2).mean(dim=(0, 1)).numpy()   # (4,)
+    post = captured['post_gp'].pow(2).mean(dim=(0, 1)).numpy()  # (4,)
+    pre  = pre  / pre.sum().clip(1e-8)
+    post = post / post.sum().clip(1e-8)
 
-    pre  = [captured['pre_gp'].pow(2).mean(dim=(0,1))[k].item()  for k in range(4)]
-    post = [captured['post_gp'].pow(2).mean(dim=(0,1))[k].item() for k in range(4)]
-    print(f"  grade energy  {'':10s}  " + "  ".join(f"{n:>16s}" for n in GRADE_NAMES))
-    print(f"  before GP     {'':10s}  " + "  ".join(f"{v:>16.4f}" for v in pre))
-    print(f"  after  GP     {'':10s}  " + "  ".join(f"{v:>16.4f}" for v in post))
+    x = np.arange(4)
+    ax = axes[0]
+    ax.bar(x - 0.2, pre,  0.4, label='before GP', color='steelblue')
+    ax.bar(x + 0.2, post, 0.4, label='after GP',  color='tomato')
+    ax.set_xticks(x)
+    ax.set_xticklabels(GRADE_NAMES)
+    ax.set_ylabel('fraction of total energy')
+    ax.set_title('Grade energy distribution')
+    ax.legend()
+    W = head.embed.weight.detach().cpu()
+    hidden = W.shape[0] // 4
+    W = W.reshape(hidden, 4, -1).norm(dim=-1).numpy()   
+    W = W / W.max().clip(1e-8)
+
+    ax = axes[1]
+    im = ax.imshow(W, aspect='auto', cmap='viridis', vmin=0, vmax=1)
+    ax.set_xticks(range(4))
+    ax.set_xticklabels(["scalar\n(e0)", "e1", "e2", "bivector\n(e12)"])
+    ax.set_ylabel('multivector index')
+    ax.set_title('Embed weight norm per blade')
+    plt.colorbar(im, ax=ax)
+
+    fig.tight_layout()
+    plt.show()
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
@@ -132,4 +148,4 @@ def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
             f"loss {train_loss:.4f}/{val_loss:.4f}  "
             f"angle_err {train_err:.1f}°/{val_err:.1f}°"
         )
-        log_grade_energy(model, val_loader, config.device, run, epoch)
+        log_embedding_viz(model, val_loader, config.device, epoch)
