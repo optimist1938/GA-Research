@@ -4,6 +4,7 @@ import torch.nn as nn
 from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.linear import MVLinear
+from clifford.models.modules.mvsilu import MVSiLU
 
 
 
@@ -85,8 +86,19 @@ class CliffordHeadSpatial(nn.Module):
     def __init__(self, n_channels):
         super().__init__()
         self.algebra = CliffordAlgebra((1.0, 1.0))
-        self.gp      = SteerableGeometricProductLayer(self.algebra, n_channels)
-        self.readout = MVLinear(self.algebra, n_channels, 1)
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                MVLinear(self.algebra, n_channels, n_channels),
+                MVSiLU(self.algebra, n_channels),
+                SteerableGeometricProductLayer(self.algebra, n_channels),
+            ),
+            nn.Sequential(
+                MVLinear(self.algebra, n_channels, n_channels),
+                MVSiLU(self.algebra, n_channels),
+                SteerableGeometricProductLayer(self.algebra, n_channels),
+            ),
+        ])
+        self.readout = nn.Linear(n_channels, 2)
 
     def forward(self, feat):
         B, C, H, W = feat.shape
@@ -100,11 +112,12 @@ class CliffordHeadSpatial(nn.Module):
             (feat * gx).mean(dim=(-2, -1)),
             (feat * gy).mean(dim=(-2, -1)),
             torch.zeros(B, C, device=feat.device),
-        ], dim=-1)                                    
+        ], dim=-1)                                     # (B, C, 4)
 
-        mv = self.gp(mv)                               
-        mv = self.readout(mv)                        
-        return mv[:, 0, 1:3]                     
+        for block in self.blocks:
+            mv = block(mv)                             # (B, C, 4)
+
+        return self.readout(mv[:, :, 1:3].norm(dim=-1))  # vnorm → (B, 2)                     
 
 
 class CliffordHeadPos(nn.Module):
