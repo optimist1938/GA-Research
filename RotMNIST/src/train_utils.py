@@ -73,6 +73,46 @@ def val_epoch(model, loader, device):
     return total_loss / n, total_err / n
 
 
+GRADE_NAMES = ["scalar (e0)", "e1", "e2", "bivector (e12)"]
+
+
+@torch.no_grad()
+def log_grade_energy(model, loader, device, run, epoch):
+    head = model.head
+    captured = {}
+    def hook_pre_gp(module, inp, out):
+        captured['pre_gp'] = inp[0].detach().cpu()
+
+    def hook_post_gp(module, inp, out):
+        captured['post_gp'] = out.detach().cpu()
+
+    h1 = head.gp.register_forward_hook(hook_pre_gp)
+    h2 = head.gp.register_forward_hook(hook_post_gp)
+
+    imgs, _ = next(iter(loader))
+    model.eval()
+    model(imgs.to(device))
+
+    h1.remove()
+    h2.remove()
+
+    logs = {}
+    for tag, mv in captured.items():
+        energy = mv.pow(2).mean(dim=(0, 1))  
+        energy = energy / energy.sum().clamp(min=1e-8) 
+        for k, name in enumerate(GRADE_NAMES):
+            logs[f"grade_energy/{tag}/{name}"] = energy[k].item()
+
+    if run is not None:
+        run.log(logs, step=epoch)
+
+    pre  = [captured['pre_gp'].pow(2).mean(dim=(0,1))[k].item()  for k in range(4)]
+    post = [captured['post_gp'].pow(2).mean(dim=(0,1))[k].item() for k in range(4)]
+    print(f"  grade energy  {'':10s}  " + "  ".join(f"{n:>16s}" for n in GRADE_NAMES))
+    print(f"  before GP     {'':10s}  " + "  ".join(f"{v:>16.4f}" for v in pre))
+    print(f"  after  GP     {'':10s}  " + "  ".join(f"{v:>16.4f}" for v in post))
+
+
 def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
     model.to(config.device)
     for epoch in range(1, config.n_epochs + 1):
@@ -92,3 +132,4 @@ def train(model, train_loader, val_loader, optimizer, scheduler, run, config):
             f"loss {train_loss:.4f}/{val_loss:.4f}  "
             f"angle_err {train_err:.1f}°/{val_err:.1f}°"
         )
+        log_grade_energy(model, val_loader, config.device, run, epoch)
