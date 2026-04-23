@@ -13,7 +13,7 @@ def create_argparser():
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     parser.add_argument("--encoder", type=str, default="resnet",
@@ -26,27 +26,6 @@ def create_argparser():
     parser.add_argument("--ga_pool_hw", type=int, nargs=2, default=[28, 28])
     parser.add_argument("--hidden_dim", type=int, nargs="+", default=[32])
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument(
-        "--i2s_resnet_output_mode",
-        type=str,
-        default="auto",
-        choices=["auto", "rotation_matrix", "fourier"],
-    )
-    parser.add_argument(
-        "--i2s_resnet_pretrained_backbone",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument(
-        "--i2s_resnet_freeze_backbone",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument(
-        "--i2s_resnet_use_positional_encoding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)

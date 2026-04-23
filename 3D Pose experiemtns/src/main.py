@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
 from src.train_utils import (
     train,
     form_checkpoint,
@@ -61,21 +61,6 @@ def instantiate(config):
             temperature=config.temperature,
             encoder_type=config.encoder,
             ga_pool_hw=tuple(config.ga_pool_hw),
-        )
-    elif config.model == "i2s_resnet":
-        output_mode = config.i2s_resnet_output_mode
-        if output_mode == "auto":
-            output_mode = "fourier" if config.loss == "prob" else "rotation_matrix"
-        model = I2S_ResNet(
-            algebra=algebra,
-            lmax=config.lmax,
-            rec_level=config.rec_level,
-            hidden_dim=config.hidden_dim,
-            temperature=config.temperature,
-            pretrained_backbone=config.i2s_resnet_pretrained_backbone,
-            freeze_backbone=config.i2s_resnet_freeze_backbone,
-            use_positional_encoding=config.i2s_resnet_use_positional_encoding,
-            output_mode=output_mode,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
