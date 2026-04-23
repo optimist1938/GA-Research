@@ -7,6 +7,7 @@ def wandb_create_run(run_name):
         return None
     run = wandb.init(
         project="Tralalero",
+        entity="clifforders",
         name=run_name
     )
     return run
