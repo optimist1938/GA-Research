@@ -4,6 +4,14 @@ from tqdm import tqdm
 from pathlib import Path
 from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
+import matplotlib.pyplot as plt
+
+
+def show_torch_img(img : torch.Tensor):
+    if len(img.shape) == 4:
+        img = img.squeeze(0)
+    img = img.cpu().permute(1, 2, 0).numpy()
+    plt.imshow(img)
 
 
 def form_checkpoint(model, optimizer, scheduler, config):
