@@ -27,6 +27,7 @@ class PointCloudProcessor:
         self.image_processor = self.pipe.image_processor
         self.model.eval()
 
+    @torch.no_grad()
     def __call__(self, x : torch.tensor):
         '''
         Arguments:
@@ -62,7 +63,13 @@ class I2P(nn.Module):
         self.depth_anything_model = PointCloudProcessor(device=device, model_size="small")
         self.device = device
         self.algebra = CliffordAlgebra((1, 1, 1))
-        self.projection = MVLinear(self.algebra, in_features=self.n_pixels * self.n_pixels, out_features=512)
+        self.adapter = nn.Sequential(
+            nn.Conv2d(1, 1, kernel_size=3, stride=2),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+            nn.Conv2d(1, 1, kernel_size=3, stride=2)
+        )
+        self.projection = MVLinear(self.algebra, in_features=55 * 55, out_features=512)
         self.tralalero = TralaleroTralala(self.algebra, in_features=512, out_features=1, hidden_dim=[256, 128, 64])
         self.head = nn.Linear(8, 9)
         self.batch_size = batch_size
@@ -72,28 +79,46 @@ class I2P(nn.Module):
     def _create_batched_clouds(self):
         if self.batch_size is None:
             return
-        v_coords, u_coords = np.indices((self.n_pixels, self.n_pixels))
+        v_coords, u_coords = np.indices((55, 55))
         v_coords, u_coords = torch.tensor(v_coords).unsqueeze(2).to(self.device), torch.tensor(u_coords).unsqueeze(2).to(self.device)
-        depth_map = torch.zeros((self.n_pixels, self.n_pixels, 1)).to(self.device)
+        depth_map = torch.zeros((55, 55, 1)).to(self.device)
         point_cloud = torch.cat((v_coords, u_coords, depth_map), dim=-1)
         self.batched_point_clouds = torch.cat([point_cloud.unsqueeze(0) for _ in range(self.batch_size)], dim=0)
 
 
-    def forward(self, x : torch.Tensor):
+    def forward(self, x, cls_info : Optional[torch.Tensor] = None, timeit=False):
         '''
         Args:
             x : torch.Tensor of size (B, C, H, W)
         '''
+        import time
+        import pandas as pd
+        
+        timings = []
         batch_size = x.size(0)
         if batch_size != self.batch_size:
             self.batch_size = batch_size
             self._create_batched_clouds()
 
+        t0 = time.perf_counter()
         x = self.depth_anything_model(x)
-        self.batched_point_clouds[:, :, :, 2] = x
+        timings.append(('x = self.depth_anything_model(x)', time.perf_counter() - t0))
+
+        x = self.adapter(x.unsqueeze(1))
+        self.batched_point_clouds[:, :, :, 2] = x.squeeze(1)
         x = self.algebra.embed_grade(self.batched_point_clouds.reshape(batch_size, -1, 3), 1)
+
+        t0 = time.perf_counter()
         x = self.projection(x)
+        timings.append(('x = self.projection(x)', time.perf_counter() - t0))
+
+        t0 = time.perf_counter()
         x = self.tralalero(x)
+        timings.append(('x = self.tralalero(x)', time.perf_counter() - t0))
+
         x = x.squeeze(1)
         x = self.head(x)
-        return x.reshape(batch_size, 3, 3)
+        out = x.reshape(batch_size, 3, 3)
+        if not timeit:
+            return out
+        return out, pd.DataFrame(timings, columns=['line', 'time_sec'])
