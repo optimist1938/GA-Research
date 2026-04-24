@@ -5,6 +5,17 @@ from pathlib import Path
 from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
 
+def rotation_matrix_loss(pred, target, alpha=0.1, beta=0.01):
+    mse = torch.mean((pred - target) ** 2)
+
+    eye = torch.eye(3, device=pred.device).unsqueeze(0)
+    ortho = torch.mean((pred.transpose(1, 2) @ pred - eye) ** 2)
+
+    det = torch.det(pred)
+    det_loss = torch.mean((det - 1.0) ** 2)
+
+    return mse + alpha * ortho + beta * det_loss
+
 
 def form_checkpoint(model, optimizer, scheduler, config):
     model_to_save = unwrap_model(model)

@@ -13,6 +13,7 @@ from src.train_utils import (
     get_available_device,
     load_checkpoint,
     maybe_wrap_model_for_multi_gpu,
+    rotation_matrix_loss,
 )
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
@@ -21,6 +22,7 @@ from src.wandb_utils import (
     wandb_log_artifact,
     wandb_finish_run,
 )
+
 
 
 def _make_algebra():
@@ -109,7 +111,7 @@ def instantiate(config):
     )
 
     if config.loss == "mse":
-        criterion = nn.MSELoss()
+        criterion = rotation_matrix_loss
     elif config.loss == "prob":
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     else:
