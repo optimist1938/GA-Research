@@ -98,7 +98,8 @@ def instantiate(config):
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
-
+    
+    print(config)
     run = wandb_create_run(config.run_name)
     print("W&B logging set up completed")
 

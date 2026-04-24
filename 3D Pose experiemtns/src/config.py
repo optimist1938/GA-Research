@@ -13,7 +13,7 @@ def create_argparser():
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     parser.add_argument("--encoder", type=str, default="resnet",

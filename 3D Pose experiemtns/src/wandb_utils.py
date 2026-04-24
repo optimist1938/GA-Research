@@ -4,12 +4,15 @@ from pathlib import Path
 
 def wandb_create_run(run_name):
     if not run_name:
+        print(f"W&B run won't be created, since run name is {run_name}")
         return None
+    print("Creating W&B run")
     run = wandb.init(
         project="3D Pose Estimation",
         entity="clifforders",
         name=run_name
     )
+    print("Created W&B run with name {} at {}".format(run.name, run.project_url))
     return run
 
 
