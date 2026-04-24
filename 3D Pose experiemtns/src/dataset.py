@@ -143,7 +143,7 @@ def create_dataloaders(config):
         train = Pascal3D(config.path_to_datasets, train=True)
         val = Pascal3D(config.path_to_datasets, train=False)
         num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(train,build_workers=num_builder) if config.ram_memory else train
+        train_dataset = InMemoryDataset(train,build_workers=num_builder, use_multiprocessing=config.multiprocessing) if config.ram_memory else train
         val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
