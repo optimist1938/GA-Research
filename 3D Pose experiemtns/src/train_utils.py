@@ -158,7 +158,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             })
         scheduler.step()
         print(
-            f"Training on {config.device} epoch {i + 1} / {config.n_epochs}. "
-            f"Train loss {train_loss}, val loss {val_loss}"
+            f"Training on {config.device} epoch {i + 1} / {config.n_epochs}. \n"
+            f"Train loss {train_loss}, val loss {val_loss}\n"
             f"Median rotation error {mre}"
         )

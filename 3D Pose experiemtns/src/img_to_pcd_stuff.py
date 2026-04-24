@@ -105,7 +105,10 @@ class I2P(nn.Module):
         timings.append(('x = self.depth_anything_model(x)', time.perf_counter() - t0))
 
         x = self.adapter(x.unsqueeze(1))
-        self.batched_point_clouds[:, :, :, 2] = x.squeeze(1)
+        x = torch.cat([
+            self.batched_point_clouds[:, :, :, :2],
+            x.squeeze(1).unsqueeze(-1)
+        ], dim=-1)
         x = self.algebra.embed_grade(self.batched_point_clouds.reshape(batch_size, -1, 3), 1)
 
         t0 = time.perf_counter()

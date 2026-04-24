@@ -129,8 +129,9 @@ def main():
     torch.cuda.empty_cache()
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
 
-    checkpoint_path = form_checkpoint(model, optimizer, scheduler, config)
-    wandb_log_artifact(run, checkpoint_path, artifact_type="checkpoint")
+    if config.save_checkpoint and not config.sanity_check:
+        checkpoint_path = form_checkpoint(model, optimizer, scheduler, config)
+        wandb_log_artifact(run, checkpoint_path, artifact_type="checkpoint")
     wandb_finish_run(run)
 
 

@@ -11,6 +11,7 @@ def create_argparser():
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
+    parser.add_argument("--save_checkpoint", type=bool, default=True)
 
     parser.add_argument("--model", type=str, default="tralalero",
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd"])
