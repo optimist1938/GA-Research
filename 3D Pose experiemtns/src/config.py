@@ -50,6 +50,18 @@ def create_argparser():
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--i2s_resnet_adapter_type",
+        type=str,
+        default="conv",
+        choices=["conv", "mlp_block", "linear"],
+    )
+    parser.add_argument(
+        "--i2s_resnet_head_type",
+        type=str,
+        default="ga",
+        choices=["ga", "mlp"],
+    )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)

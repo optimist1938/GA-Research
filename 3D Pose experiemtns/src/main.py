@@ -78,6 +78,8 @@ def instantiate(config):
             freeze_backbone=config.i2s_resnet_freeze_backbone,
             use_positional_encoding=config.i2s_resnet_use_positional_encoding,
             output_mode=output_mode,
+            adapter_type=config.i2s_resnet_adapter_type,
+            head_type=config.i2s_resnet_head_type,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

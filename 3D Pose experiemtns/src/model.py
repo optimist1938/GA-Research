@@ -242,6 +242,61 @@ class GA_I2S(nn.Module):
         idx = self.get_nearest_idx(rot_gt).long().view(-1)
         return criterion(logits, idx)
 
+class _MLPBlockAdapter(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, out_hw: int):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d((out_hw, out_hw))
+        self.fc1 = nn.Linear(in_ch, 256)
+        self.act = nn.ReLU()
+        self.fc2 = nn.Linear(256, out_ch)
+        self._out_ch = out_ch
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pool(x)
+        B, C, H, W = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(B * H * W, C)
+        x = self.fc2(self.act(self.fc1(x)))
+        return x.reshape(B, H, W, self._out_ch).permute(0, 3, 1, 2).contiguous()
+
+
+class _LinearAdapter(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, out_hw: int):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d((out_hw, out_hw))
+        self.fc = nn.Linear(in_ch, out_ch)
+        self._out_ch = out_ch
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pool(x)
+        B, C, H, W = x.shape
+        x = x.permute(0, 2, 3, 1).reshape(B * H * W, C)
+        x = self.fc(x)
+        return x.reshape(B, H, W, self._out_ch).permute(0, 3, 1, 2).contiguous()
+
+
+class MLPHead(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        mv_dim: int,
+        out_features: int,
+        hidden_dim: Union[int, List[int]],
+    ):
+        super().__init__()
+        in_size = in_features * mv_dim
+        hd = hidden_dim[0] if isinstance(hidden_dim, list) else int(hidden_dim)
+        self.net = nn.Sequential(
+            nn.Linear(in_size, hd),
+            nn.ReLU(),
+            nn.Linear(hd, out_features),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = x.shape[0]
+        out = self.net(x.reshape(B, -1))  # [B, out_features]
+        return out.unsqueeze(-1)           # [B, out_features, 1]
+
+
 class TralaleroTralala(nn.Module):
     def __init__(
         self,
@@ -385,6 +440,8 @@ class I2S_ResNet(nn.Module):
         freeze_backbone: bool = True,
         use_positional_encoding: bool = True,
         output_mode: str = "auto",
+        adapter_type: str = "conv",
+        head_type: str = "ga",
     ):
         super().__init__()
         self.algebra = algebra
@@ -419,19 +476,24 @@ class I2S_ResNet(nn.Module):
             for p in self.backbone.parameters():
                 p.requires_grad = False
 
-        self.conv_adapter = nn.Sequential(
-            nn.Conv2d(2048, 256, kernel_size=1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.SiLU(inplace=True),
+        if adapter_type == "mlp_block":
+            self.conv_adapter = _MLPBlockAdapter(2048, self._mv_dim, self.conv_adapter_output)
+        elif adapter_type == "linear":
+            self.conv_adapter = _LinearAdapter(2048, self._mv_dim, self.conv_adapter_output)
+        else:
+            self.conv_adapter = nn.Sequential(
+                nn.Conv2d(2048, 256, kernel_size=1, bias=False),
+                nn.BatchNorm2d(256),
+                nn.SiLU(inplace=True),
 
-            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.SiLU(inplace=True),
+                nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.SiLU(inplace=True),
 
-            nn.Conv2d(64, self._mv_dim, kernel_size=1, bias=True),
+                nn.Conv2d(64, self._mv_dim, kernel_size=1, bias=True),
 
-            nn.AdaptiveAvgPool2d((self.conv_adapter_output, self.conv_adapter_output)),
-        )
+                nn.AdaptiveAvgPool2d((self.conv_adapter_output, self.conv_adapter_output)),
+            )
 
         self.use_positional_encoding = bool(use_positional_encoding)
         if self.use_positional_encoding:
@@ -439,18 +501,32 @@ class I2S_ResNet(nn.Module):
             nn.init.trunc_normal_(self.positional_embedding, std=0.02)
 
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
-        self.ga_head_fourier = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=self.num_coeffs,
-        )
-        self.ga_head_rotation = TralaleroTralala(
-            algebra=algebra,
-            in_features=self._n_mv,
-            hidden_dim=hidden_dim,
-            out_features=9,
-        )
+        if head_type == "mlp":
+            self.ga_head_fourier = MLPHead(
+                in_features=self._n_mv,
+                mv_dim=self._mv_dim,
+                out_features=self.num_coeffs,
+                hidden_dim=hidden_dim,
+            )
+            self.ga_head_rotation = MLPHead(
+                in_features=self._n_mv,
+                mv_dim=self._mv_dim,
+                out_features=9,
+                hidden_dim=hidden_dim,
+            )
+        else:
+            self.ga_head_fourier = TralaleroTralala(
+                algebra=algebra,
+                in_features=self._n_mv,
+                hidden_dim=hidden_dim,
+                out_features=self.num_coeffs,
+            )
+            self.ga_head_rotation = TralaleroTralala(
+                algebra=algebra,
+                in_features=self._n_mv,
+                hidden_dim=hidden_dim,
+                out_features=9,
+            )
 
         xyx = so3_healpix_grid(rec_level=self.rec_level)
         wign = flat_wigner(self.lmax, *xyx)
