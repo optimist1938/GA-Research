@@ -6,8 +6,15 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S
-from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet
+from src.train_utils import (
+    train,
+    form_checkpoint,
+    get_available_device,
+    load_checkpoint,
+    maybe_wrap_model_for_multi_gpu,
+    rotation_matrix_loss,
+)
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
     wandb_create_run,
@@ -17,8 +24,9 @@ from src.wandb_utils import (
 )
 
 
+
 def _make_algebra():
-    return CliffordAlgebra((1, 1, 1, 1, -1))
+    return CliffordAlgebra((1, 1, 1))
 
 
 def instantiate(config):
@@ -28,9 +36,13 @@ def instantiate(config):
     algebra = _make_algebra()
 
     if config.model == "tralalero":
-        model = TralaleroCompetitor(algebra)
+        model = TralaleroCompetitor(
+            algebra,
+            encoder_type=config.encoder,
+            ga_pool_hw=tuple(config.ga_pool_hw),
+        )
     elif config.model == "mlp":
-        model = MLPBaseline()
+        model = MLPBaseline(encoder_type=config.encoder)
     elif config.model == "i2s":
         model = I2S(
             algebra=algebra,
@@ -39,6 +51,33 @@ def instantiate(config):
             n_mv=config.n_mv,
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
+            encoder_type=config.encoder,
+        )
+    elif config.model == "ga_i2s":
+        model = GA_I2S(
+            algebra=algebra,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            n_mv=config.n_mv,
+            hidden_dim=config.hidden_dim,
+            temperature=config.temperature,
+            encoder_type=config.encoder,
+            ga_pool_hw=tuple(config.ga_pool_hw),
+        )
+    elif config.model == "i2s_resnet":
+        output_mode = config.i2s_resnet_output_mode
+        if output_mode == "auto":
+            output_mode = "fourier" if config.loss == "prob" else "rotation_matrix"
+        model = I2S_ResNet(
+            algebra=algebra,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            hidden_dim=config.hidden_dim,
+            temperature=config.temperature,
+            pretrained_backbone=config.i2s_resnet_pretrained_backbone,
+            freeze_backbone=config.i2s_resnet_freeze_backbone,
+            use_positional_encoding=config.i2s_resnet_use_positional_encoding,
+            output_mode=output_mode,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
@@ -46,18 +85,44 @@ def instantiate(config):
     config.device = get_available_device()
     
     model.to(config.device)
+    model = maybe_wrap_model_for_multi_gpu(model, config)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
-    scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1)
+    warmup_epochs = 5
+    cosine_epochs = config.n_epochs - warmup_epochs
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1, 
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_epochs,
+        eta_min=config.lr * 0.05 
+    )
+
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs]
+    )
 
     if config.loss == "mse":
-        criterion = nn.MSELoss()
+        criterion = rotation_matrix_loss
     elif config.loss == "prob":
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
 
-    run = wandb_create_run(config.run_name)
+    run = wandb_create_run(
+        config.run_name,
+        project=config.wandb_project,
+        entity=config.wandb_entity,
+        group=config.wandb_group,
+    )
     print("W&B logging set up completed")
 
     return train_loader, val_loader, model, optimizer, scheduler, criterion, run
@@ -83,6 +148,7 @@ def main():
             print(f"Failed to load checkpoint. Starting from scratch. Error: {e}")
 
     wandb_log_code(run, Path("."))
+    torch.cuda.empty_cache()
     train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config)
 
     checkpoint_path = form_checkpoint(model, optimizer, scheduler, config)

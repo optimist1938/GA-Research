@@ -9,22 +9,50 @@ def create_argparser():
     parser.add_argument("--path_to_datasets", type=str, required=True)
     parser.add_argument("--path_to_checkpoint",type=str,default=None)
     parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--wandb_project", type=str, default="3D Pose Estimation")
+    parser.add_argument("--wandb_entity", type=str, default="clifforders")
+    parser.add_argument("--wandb_group", type=str, default=None)
     parser.add_argument("--sanity_check", action="store_true")
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
+    parser.add_argument("--encoder", type=str, default="resnet",
+                        choices=["resnet", "ga", "ga_canonical"])
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)
     parser.add_argument("--rec_level", type=int, default=3)
     parser.add_argument("--n_mv", type=int, default=8)
-    parser.add_argument("--hidden_dim", type=int, default=32)
+    parser.add_argument("--ga_pool_hw", type=int, nargs=2, default=[28, 28])
+    parser.add_argument("--hidden_dim", type=int, nargs="+", default=[32])
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--i2s_resnet_output_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "rotation_matrix", "fourier"],
+    )
+    parser.add_argument(
+        "--i2s_resnet_pretrained_backbone",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--i2s_resnet_freeze_backbone",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--i2s_resnet_use_positional_encoding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 
@@ -36,3 +64,6 @@ class JsonYamlevich:
     n_epochs: int = 1
     batch_size: int = 32
     path_to_datasets: str = "/Users/chaykovsky/Downloads/"
+    wandb_project: str = "CLIP"
+    wandb_entity: str | None = "clifforders"
+    wandb_group: str | None = None

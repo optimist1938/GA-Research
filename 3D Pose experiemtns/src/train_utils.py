@@ -1,13 +1,26 @@
 import torch
+import inspect
 from tqdm import tqdm
 from pathlib import Path
-from evaluation_metrics import calculate_evaluation_metrics
+from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
+
+def rotation_matrix_loss(pred, target, alpha=0.1, beta=0.01):
+    mse = torch.mean((pred - target) ** 2)
+
+    eye = torch.eye(3, device=pred.device).unsqueeze(0)
+    ortho = torch.mean((pred.transpose(1, 2) @ pred - eye) ** 2)
+
+    det = torch.det(pred)
+    det_loss = torch.mean((det - 1.0) ** 2)
+
+    return mse + alpha * ortho + beta * det_loss
 
 
 def form_checkpoint(model, optimizer, scheduler, config):
+    model_to_save = unwrap_model(model)
     checkpoint = {
-        "model": model.state_dict(),
+        "model": model_to_save.state_dict(),
         "scheduler": scheduler.state_dict(),
         "optimizer": optimizer.state_dict(),
         "config": vars(config),
@@ -22,9 +35,12 @@ def load_checkpoint(model, optimizer, scheduler, path, device):
         return model, optimizer, scheduler
 
     checkpoint = torch.load(path, map_location=device)
-    model.load_state_dict(checkpoint["model"])
+    unwrap_model(model).load_state_dict(checkpoint["model"])
     optimizer.load_state_dict(checkpoint["optimizer"])
-    scheduler.load_state_dict(checkpoint["scheduler"])
+    try:
+        scheduler.load_state_dict(checkpoint["scheduler"])
+    except:
+        scheduler = scheduler
     return model, optimizer, scheduler
 
 
@@ -50,30 +66,74 @@ def get_available_device():
     return torch.device("cpu")
 
 
+def _supports_class_argument(method) -> bool:
+    params = list(inspect.signature(method).parameters.values())
+    return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
+
+
+def unwrap_model(model):
+    return model.module if isinstance(model, torch.nn.DataParallel) else model
+
+
+def maybe_wrap_model_for_multi_gpu(model, config):
+    use_multi_gpu = getattr(config, "multi_gpu", True)
+    if use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        n_devices = min(torch.cuda.device_count(), 2)
+        model = torch.nn.DataParallel(model, device_ids=list(range(n_devices)))
+    return model
+
+
+def _call_model_method(model, method_name: str, *args):
+    target = unwrap_model(model)
+    method = getattr(target, method_name)
+    return method(*args)
+
 def _compute_loss(model, data, criterion, config):
     img = data["img"].to(config.device)
     targets = data["rot"].to(config.device)
-    outputs = model(img)
+
+    clas = None
+    if "cls" in data:
+        clas = data["cls"].to(config.device)
+
+    unwrapped_model = unwrap_model(model)
+
+    if clas is not None and _supports_class_argument(unwrapped_model.forward):
+        outputs = model(img, clas)
+    else:
+        outputs = model(img)
+
     if config.loss == "prob":
-        idx = model.get_nearest_idx(targets)
+        idx = _call_model_method(model, "get_nearest_idx", targets).long().view(-1)
         return criterion(outputs, idx)
-    return criterion(outputs,targets)
+    return criterion(outputs, targets)
 
 
 def train_epoch(model, loader, optimizer, criterion, config):
     total_loss = 0.0
     n_objects = 0
-
-    scaler = torch.amp.GradScaler("cuda")
+    device_type = "cuda" if config.device.type == "cuda" else "cpu"
+    
+    scaler = torch.amp.GradScaler(device_type) if device_type == "cuda" else None
+    
     model.train()
     for data in tqdm(loader):
         optimizer.zero_grad(set_to_none=True)
 
+        
         loss = _compute_loss(model, data, criterion, config)
-
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer) 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
         bs = data["img"].shape[0]
         total_loss += float(loss.detach().item()) * bs
@@ -86,18 +146,16 @@ def train_epoch(model, loader, optimizer, criterion, config):
 def validate_epoch(model, loader, criterion, config):
     total_loss = 0.0
     n_objects = 0
-    errors = []
 
     model.eval()
     for data in tqdm(loader):
         loss = _compute_loss(model, data, criterion, config)
 
-        total_loss += loss
-        n_objects += len(data["img"])
+        bs = data["img"].shape[0]
+        total_loss += float(loss.detach().item()) * bs
+        n_objects += bs
 
-    total_loss /= n_objects
-
-    return total_loss, np.median(np.hstack(errors)).__float__()
+    return total_loss / max(n_objects, 1)
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, config):
@@ -111,7 +169,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             run.log({
                 "train_loss" : train_loss,
                 "val_loss" : val_loss,
-                "median_rotation_error" : mre,
+                "val_rot_err_deg" : mre,
                 "learning_rate" : scheduler.get_last_lr()[0],
                 "gradient_norm" : grad_norm(model)
             })

@@ -2,12 +2,14 @@ import wandb
 from pathlib import Path
 
 
-def wandb_create_run(run_name):
+def wandb_create_run(run_name, project="3D Pose Estimation", entity="clifforders", group=None):
     if not run_name:
         return None
     run = wandb.init(
-        project="Tralalero",
-        name=run_name
+        project=project,
+        entity=entity,
+        group=group,
+        name=run_name,
     )
     return run
 
