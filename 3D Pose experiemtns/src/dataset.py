@@ -1,9 +1,9 @@
 from image2sphere.pascal_dataset import Pascal3D
-from torch.utils.data import Dataset
-from image2sphere.pascal_dataset import Pascal3D
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 import torch
+from image2sphere.pascal_dataset import Pascal3D
+from tqdm import tqdm
+import multiprocessing as mp
+from torch.utils.data import Dataset, DataLoader
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, config):
@@ -28,6 +28,23 @@ def _collate_keep(img_key="img", rot_key="rot"):
         return imgs, rots
     return _c
 
+
+def _iter_chunks(n, chunk_size):
+    for start in range(0, n, chunk_size):
+        yield list(range(start, min(start + chunk_size, n)))
+
+
+def _load_chunk(args):
+    base, indices, img_key, rot_key = args
+    imgs = []
+    rots = []
+    for idx in indices:
+        sample = base[idx]
+        imgs.append(sample[img_key])
+        rots.append(sample[rot_key])
+    return torch.stack(imgs, dim=0), torch.stack(rots, dim=0)
+
+
 class InMemoryDataset(Dataset):
     def __init__(
         self,
@@ -37,6 +54,7 @@ class InMemoryDataset(Dataset):
         store_uint8: bool = True,
         img_key: str = "img",
         rot_key: str = "rot",
+        use_multiprocessing: bool = False,
     ):
         self.base = base
         self.img_key = img_key
@@ -58,34 +76,56 @@ class InMemoryDataset(Dataset):
 
         self.targets = torch.empty((n, *rot_shape), dtype=torch.float32)
 
-        loader = DataLoader(
-            base,
-            batch_size=build_batch_size,
-            shuffle=False,
-            num_workers=build_workers,
-            pin_memory=False,
-            persistent_workers=(build_workers > 0),
-            prefetch_factor=4 if build_workers > 0 else None,
-            collate_fn=_collate_keep(img_key, rot_key),
-        )
-
-        write_pos = 0
-        for imgs, rots in tqdm(loader,desc="Loading data into RAM"):
-            bsz = imgs.shape[0]
-
-            if store_uint8:
-                if imgs.dtype != torch.uint8:
-                    imgs_u8 = (imgs.clamp(0, 1) * 255.0).to(torch.uint8)
-                else:
-                    imgs_u8 = imgs
-                self.imgs[write_pos:write_pos+bsz].copy_(imgs_u8)
-            else:
-                self.imgs[write_pos:write_pos+bsz].copy_(imgs.to(torch.float32))
-
-            self.targets[write_pos:write_pos+bsz].copy_(rots.to(torch.float32))
-            write_pos += bsz
-
         self.store_uint8 = store_uint8
+
+        if use_multiprocessing:
+            ctx = mp.get_context("spawn")
+            chunks = _iter_chunks(n, build_batch_size)
+            tasks = ((base, chunk, img_key, rot_key) for chunk in chunks)
+
+            write_pos = 0
+            with ctx.Pool(processes=max(1, build_workers)) as pool:
+                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc="Loading data into RAM"):
+                    bsz = imgs.shape[0]
+
+                    if store_uint8:
+                        if imgs.dtype != torch.uint8:
+                            imgs_u8 = (imgs.clamp(0, 1) * 255.0).to(torch.uint8)
+                        else:
+                            imgs_u8 = imgs
+                        self.imgs[write_pos:write_pos + bsz].copy_(imgs_u8)
+                    else:
+                        self.imgs[write_pos:write_pos + bsz].copy_(imgs.to(torch.float32))
+
+                    self.targets[write_pos:write_pos + bsz].copy_(rots.to(torch.float32))
+                    write_pos += bsz
+        else:
+            loader = DataLoader(
+                base,
+                batch_size=build_batch_size,
+                shuffle=False,
+                num_workers=build_workers,
+                pin_memory=False,
+                persistent_workers=(build_workers > 0),
+                prefetch_factor=4 if build_workers > 0 else None,
+                collate_fn=_collate_keep(img_key, rot_key),
+            )
+
+            write_pos = 0
+            for imgs, rots in tqdm(loader, desc="Loading data into RAM"):
+                bsz = imgs.shape[0]
+
+                if store_uint8:
+                    if imgs.dtype != torch.uint8:
+                        imgs_u8 = (imgs.clamp(0, 1) * 255.0).to(torch.uint8)
+                    else:
+                        imgs_u8 = imgs
+                    self.imgs[write_pos:write_pos + bsz].copy_(imgs_u8)
+                else:
+                    self.imgs[write_pos:write_pos + bsz].copy_(imgs.to(torch.float32))
+
+                self.targets[write_pos:write_pos + bsz].copy_(rots.to(torch.float32))
+                write_pos += bsz
 
     def __len__(self):
         return self.imgs.shape[0]
@@ -96,7 +136,6 @@ class InMemoryDataset(Dataset):
             x = x.to(torch.float32) / 255.0
         y = self.targets[idx]
         return {"img": x, "rot": y}
-
 
 
 def create_dataloaders(config):
