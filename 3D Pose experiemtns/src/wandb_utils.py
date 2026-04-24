@@ -6,7 +6,7 @@ def wandb_create_run(run_name):
     if not run_name:
         return None
     run = wandb.init(
-        project="Tralalero",
+        project="3D Pose Estimation",
         entity="clifforders",
         name=run_name
     )
