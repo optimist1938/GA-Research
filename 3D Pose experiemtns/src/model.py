@@ -393,7 +393,7 @@ class I2S_ResNet(nn.Module):
         self.temperature = float(temperature)
 
         self._mv_dim = int(2**algebra.dim)
-        self._n_mv = 64
+        self._n_mv = 100
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
 
@@ -435,7 +435,11 @@ class I2S_ResNet(nn.Module):
             nn.BatchNorm2d(self._mv_dim),
             nn.ReLU(inplace=True),
 
-            nn.AdaptiveAvgPool2d((8, 8)),
+            nn.Conv2d(64, self._mv_dim, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(self._mv_dim),
+            nn.ReLU(inplace=True),
+
+            nn.AdaptiveAvgPool2d((10, 10)),
         )
 
         self.use_positional_encoding = bool(use_positional_encoding)
@@ -472,7 +476,7 @@ class I2S_ResNet(nn.Module):
         fmap = self.backbone(x)
         adapted = self.conv_adapter(fmap)
         b, c, h, w = adapted.shape
-        if (c, h, w) != (self._mv_dim, 8, 8):
+        if (c, h, w) != (self._mv_dim, 10, 10):
             raise RuntimeError(f"Expected adapted features [B, 8, 8, 8], got [B, {c}, {h}, {w}]")
         tokens = adapted.flatten(2).transpose(1, 2)
         if self.use_positional_encoding:
