@@ -2,7 +2,7 @@ import torch
 import inspect
 from image2sphere.so3_utils import rotation_error
 from image2sphere.predictor import I2S
-from model import I2S as I2SFake
+from src.model import I2S as I2SFake
 from tqdm import tqdm
 import numpy as np
 
