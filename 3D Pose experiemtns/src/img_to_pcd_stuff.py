@@ -27,7 +27,7 @@ class PointCloudProcessor:
         self.image_processor = self.pipe.image_processor
         self.model.eval()
 
-    @torch.no_grad()
+
     def __call__(self, x : torch.tensor):
         '''
         Arguments:
