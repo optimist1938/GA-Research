@@ -5,6 +5,7 @@ from transformers import pipeline
 import matplotlib.pyplot as plt
 import numpy as np 
 import open3d as o3d
+import plotly.graph_objects as go
 
 
 from clifford.models.modules.linear import MVLinear
@@ -17,9 +18,30 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from src.model import TralaleroTralala
 
 
+def draw_clouds(points, colors=None, size=1):
+    if colors is not None:
+        fig = go.Figure(data=[go.Scatter3d(
+            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            mode='markers',
+            marker=dict(size=size, color=colors)
+        )])
+    else:
+        fig = go.Figure(data=[go.Scatter3d(
+            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            mode='markers',
+            marker=dict(size=size)
+        )])
+    
+    fig.update_layout(
+        scene=dict(xaxis_title='X (pixels)', yaxis_title='Y (pixels)', zaxis_title='Depth'),
+        title='3D Point Cloud'
+    )
+    fig.show()
+
+
 
 class PointCloudProcessor:
-    def __init__(self, model_size: str = "small", device: Optional[str] = None):
+    def __init__(self, model_size: str = "base", device: Optional[str] = None):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         model_name = f"depth-anything/Depth-Anything-V2-{model_size.capitalize()}-hf"
         self.pipe = pipeline(task="depth-estimation", model=model_name, device=self.device)
@@ -34,6 +56,16 @@ class PointCloudProcessor:
             x : torch.Tensor of size (B, C, H, W)
         '''
         return self.model(x).predicted_depth.detach()
+
+    def visualize_plotly(self, x : torch.Tensor, raw_img=True):
+        '''Draw an interactive 3D point cloud of given object'''
+        colors = x.cpu().numpy().reshape(-1, 3)
+        if raw_img:
+            x = self.model(x.unsqueeze(0)).squeeze(0)
+        x = x.detach().cpu().numpy()
+        v, u = np.indices((224, 224))
+        points = np.stack((v, u, x), axis=-1).reshape(-1, 3)
+
 
     def visualize_matplotlib(self, pcd: o3d.geometry.PointCloud, sample_size: int = 10000):
         points = np.asarray(pcd.points)
@@ -63,25 +95,24 @@ class I2P(nn.Module):
         self.depth_anything_model = PointCloudProcessor(device=device, model_size="small")
         self.device = device
         self.algebra = CliffordAlgebra((1, 1, 1))
-        self.adapter = nn.Sequential(
-            nn.Conv2d(1, 1, kernel_size=3, stride=2),
-            nn.BatchNorm2d(1),
-            nn.ReLU(),
-            nn.Conv2d(1, 1, kernel_size=3, stride=2)
-        )
-        self.projection = MVLinear(self.algebra, in_features=55 * 55, out_features=512)
+        self.projection = MVLinear(self.algebra, in_features=224 * 224, out_features=512)
         self.tralalero = TralaleroTralala(self.algebra, in_features=512, out_features=1, hidden_dim=[256, 128, 64])
         self.head = nn.Linear(8, 9)
         self.batch_size = batch_size
         self.batched_point_clouds = None
         self._create_batched_clouds()
 
+
     def _create_batched_clouds(self):
         if self.batch_size is None:
             return
-        v_coords, u_coords = np.indices((55, 55))
+        N = self.n_pixels
+        v_coords, u_coords = np.indices((N, N))
         v_coords, u_coords = torch.tensor(v_coords).unsqueeze(2).to(self.device), torch.tensor(u_coords).unsqueeze(2).to(self.device)
-        depth_map = torch.zeros((55, 55, 1)).to(self.device)
+        u_coords, v_coords = u_coords.to(torch.float32), v_coords.to(torch.float32)
+        u_coords -= u_coords.mean()
+        v_coords -= v_coords.mean()
+        depth_map = torch.zeros((N, N, 1)).to(self.device)
         point_cloud = torch.cat((v_coords, u_coords, depth_map), dim=-1)
         self.batched_point_clouds = torch.cat([point_cloud.unsqueeze(0) for _ in range(self.batch_size)], dim=0)
 
@@ -104,7 +135,6 @@ class I2P(nn.Module):
         x = self.depth_anything_model(x)
         timings.append(('x = self.depth_anything_model(x)', time.perf_counter() - t0))
 
-        x = self.adapter(x.unsqueeze(1))
         x = torch.cat([
             self.batched_point_clouds[:, :, :, :2],
             x.squeeze(1).unsqueeze(-1)
