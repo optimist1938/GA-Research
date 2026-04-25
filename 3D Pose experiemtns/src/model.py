@@ -321,12 +321,14 @@ class MLPHead(nn.Module):
     ):
         super().__init__()
         in_size = in_features * mv_dim
-        hd = hidden_dim[0] if isinstance(hidden_dim, list) else int(hidden_dim)
-        self.net = nn.Sequential(
-            nn.Linear(in_size, hd),
-            nn.ReLU(),
-            nn.Linear(hd, out_features),
-        )
+        dims = hidden_dim if isinstance(hidden_dim, list) else [int(hidden_dim)]
+        layers = []
+        prev = in_size
+        for hd in dims:
+            layers += [nn.Linear(prev, hd), nn.ReLU()]
+            prev = hd
+        layers.append(nn.Linear(prev, out_features))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
