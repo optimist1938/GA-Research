@@ -169,7 +169,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             run.log({
                 "train_loss" : train_loss,
                 "val_loss" : val_loss,
-                "val_rot_err_deg" : mre,
+                "median_rotation_error" : mre,
                 "learning_rate" : scheduler.get_last_lr()[0],
                 "gradient_norm" : grad_norm(model)
             })

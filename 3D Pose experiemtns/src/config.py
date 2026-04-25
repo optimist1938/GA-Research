@@ -54,7 +54,7 @@ def create_argparser():
         "--i2s_resnet_adapter_type",
         type=str,
         default="conv",
-        choices=["conv", "mlp_block", "linear"],
+        choices=["conv", "mlp_block", "linear", "geometric"],
     )
     parser.add_argument(
         "--i2s_resnet_head_type",

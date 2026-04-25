@@ -242,6 +242,43 @@ class GA_I2S(nn.Module):
         idx = self.get_nearest_idx(rot_gt).long().view(-1)
         return criterion(logits, idx)
 
+class _CliffordInteraction(nn.Module):
+    def __init__(self, dim: int, shifts=(1, 2, 4)):
+        super().__init__()
+        self.shifts = list(shifts)
+        self.act = nn.SiLU()
+        self.proj = nn.Conv2d(dim * len(self.shifts) * 2, dim, kernel_size=1)
+
+    def forward(self, z1: torch.Tensor, z2: torch.Tensor) -> torch.Tensor:
+        feats = []
+        for s in self.shifts:
+            z2_s = torch.roll(z2, shifts=s, dims=1)
+            z1_s = torch.roll(z1, shifts=s, dims=1)
+            feats.append(z1 * z2_s - z2 * z1_s)       # wedge product
+            feats.append(self.act(z1 * z2_s))           # inner product
+        return self.proj(torch.cat(feats, dim=1))
+
+
+class _GeometricAdapter(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, out_hw: int):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d((out_hw, out_hw))
+        self.proj = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.SiLU(inplace=True),
+        )
+        self.get_state   = nn.Conv2d(out_ch, out_ch, kernel_size=1)
+        self.get_context = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1, groups=out_ch)
+        self.interaction = _CliffordInteraction(out_ch, shifts=(1, 2, 4))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pool(x)
+        x = self.proj(x)
+        x = x + self.interaction(self.get_state(x), self.get_context(x))
+        return x
+
+
 class _MLPBlockAdapter(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, out_hw: int):
         super().__init__()
@@ -480,6 +517,8 @@ class I2S_ResNet(nn.Module):
             self.conv_adapter = _MLPBlockAdapter(2048, self._mv_dim, self.conv_adapter_output)
         elif adapter_type == "linear":
             self.conv_adapter = _LinearAdapter(2048, self._mv_dim, self.conv_adapter_output)
+        elif adapter_type == "geometric":
+            self.conv_adapter = _GeometricAdapter(2048, self._mv_dim, self.conv_adapter_output)
         else:
             self.conv_adapter = nn.Sequential(
                 nn.Conv2d(2048, 256, kernel_size=1, bias=False),
