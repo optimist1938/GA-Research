@@ -2,7 +2,7 @@ import torch
 import inspect
 from image2sphere.so3_utils import rotation_error
 from image2sphere.predictor import I2S
-from src.model import I2S as I2SFake
+from src.model import I2S as I2SFake, _rotor_to_rotmat
 from tqdm import tqdm
 import numpy as np
 
@@ -80,6 +80,8 @@ def calculate_evaluation_metrics(model, loader, config):
         if config.loss == "prob" and hasattr(unwrapped_model, "so3_rotmats_cache"):
             idx = torch.argmax(outputs, dim=-1)
             pred_rotmat = unwrapped_model.so3_rotmats_cache[idx]
+        elif config.loss == "rotor":
+            pred_rotmat = _rotor_to_rotmat(outputs)
         else:
             pred_rotmat = outputs
 

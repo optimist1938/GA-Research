@@ -18,7 +18,7 @@ def create_argparser():
     parser.add_argument("--model", type=str, default="tralalero",
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
     parser.add_argument("--loss", type=str, default="mse",
-                        choices=["mse", "prob"])
+                        choices=["mse", "prob", "rotor"])
     parser.add_argument("--encoder", type=str, default="resnet",
                         choices=["resnet", "ga", "ga_canonical"])
 

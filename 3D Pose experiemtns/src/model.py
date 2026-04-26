@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
@@ -60,6 +61,53 @@ def _move_unregistered_tensors_to_device(module: nn.Module, device: torch.device
             if moved_value is not attr_value:
                 setattr(submodule, attr_name, moved_value)
 
+
+
+def _rotmat_to_rotor(R: torch.Tensor) -> torch.Tensor:
+    m = R
+    K = torch.zeros(R.shape[0], 4, 4, device=R.device, dtype=R.dtype)
+    K[:, 0, 0] = m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2]
+    K[:, 0, 1] = m[:, 0, 1] + m[:, 1, 0]
+    K[:, 0, 2] = m[:, 0, 2] + m[:, 2, 0]
+    K[:, 0, 3] = m[:, 2, 1] - m[:, 1, 2]
+    K[:, 1, 1] = m[:, 1, 1] - m[:, 0, 0] - m[:, 2, 2]
+    K[:, 1, 2] = m[:, 1, 2] + m[:, 2, 1]
+    K[:, 1, 3] = m[:, 0, 2] - m[:, 2, 0]
+    K[:, 2, 2] = m[:, 2, 2] - m[:, 0, 0] - m[:, 1, 1]
+    K[:, 2, 3] = m[:, 1, 0] - m[:, 0, 1]
+    K[:, 3, 3] = m[:, 0, 0] + m[:, 1, 1] + m[:, 2, 2]
+    K = K + K.transpose(-1, -2) - torch.diag_embed(K.diagonal(dim1=-2, dim2=-1))
+    K = K / 3.0
+    _, eigvecs = torch.linalg.eigh(K)
+    q_xyzw = eigvecs[:, :, -1]                          
+    q_xyzw = q_xyzw * torch.sign(q_xyzw[:, 3:4] + 1e-10)  
+    w  = q_xyzw[:, 3]
+    qx = q_xyzw[:, 0]
+    qy = q_xyzw[:, 1]
+    qz = q_xyzw[:, 2]
+    rotor = torch.zeros(R.shape[0], 8, device=R.device, dtype=R.dtype)
+    rotor[:, 0] =  w   
+    rotor[:, 4] = -qz   
+    rotor[:, 5] = -qy  
+    rotor[:, 6] = -qx   
+    return rotor
+
+
+def _rotor_to_rotmat(mv: torch.Tensor) -> torch.Tensor:
+    w   =  mv[:, 0] 
+    qz  = -mv[:, 4]  
+    qy  = -mv[:, 5]   
+    qx  = -mv[:, 6]  
+
+    norm = torch.sqrt(w**2 + qx**2 + qy**2 + qz**2 + 1e-10)
+    w, qx, qy, qz = w / norm, qx / norm, qy / norm, qz / norm
+
+    R = torch.stack([
+        1 - 2*(qy**2 + qz**2),  2*(qx*qy - w*qz),      2*(qx*qz + w*qy),
+        2*(qx*qy + w*qz),        1 - 2*(qx**2 + qz**2),  2*(qy*qz - w*qx),
+        2*(qx*qz - w*qy),        2*(qy*qz + w*qx),        1 - 2*(qx**2 + qy**2),
+    ], dim=-1).reshape(-1, 3, 3)
+    return R
 
 
 class I2S(nn.Module):
@@ -569,6 +617,14 @@ class I2S_ResNet(nn.Module):
                 out_features=9,
             )
 
+        if output_mode == "rotor":
+            self.ga_head_rotor = TralaleroTralala(
+                algebra=algebra,
+                in_features=self._n_mv,
+                hidden_dim=hidden_dim,
+                out_features=1,
+            )
+
         xyx = so3_healpix_grid(rec_level=self.rec_level)
         wign = flat_wigner(self.lmax, *xyx)
         self.register_buffer("so3_xyx", xyx, persistent=False)
@@ -608,6 +664,9 @@ class I2S_ResNet(nn.Module):
             rot_mv = self.ga_head_rotation(tokens)
             rot = rot_mv[..., 0].reshape(x.shape[0], 3, 3)
             return rot
+        if mode == "rotor":
+            rotor_mv = self.ga_head_rotor(tokens)   # [B, 1, 8]
+            return rotor_mv.squeeze(1)               # [B, 8]
         raise ValueError(f"Unsupported mode: {mode}")
 
     def logits_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:

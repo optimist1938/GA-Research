@@ -4,6 +4,22 @@ from tqdm import tqdm
 from pathlib import Path
 from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
+from src.model import _rotmat_to_rotor
+
+def rotor_loss(pred: torch.Tensor, target: torch.Tensor, w_odd: float = 0.5) -> torch.Tensor:
+    target_rotor = _rotmat_to_rotor(target)                            # [B, 8]
+
+    d_pos = (pred - target_rotor).pow(2).sum(dim=-1, keepdim=True)
+    d_neg = (pred + target_rotor).pow(2).sum(dim=-1, keepdim=True)
+    target_rotor = torch.where(d_neg < d_pos, -target_rotor, target_rotor)
+
+    loss_grade0 = (pred[:, 0:1]  - target_rotor[:, 0:1]).pow(2).mean()   # scalar
+    loss_grade2 = (pred[:, 4:7]  - target_rotor[:, 4:7]).pow(2).mean()   # bivectors
+    loss_grade1 = pred[:, 1:4].pow(2).mean()                              # vectors
+    loss_grade3 = pred[:, 7:8].pow(2).mean()                              # pseudoscalar
+
+    return loss_grade0 + loss_grade2 + w_odd * (loss_grade1 + loss_grade3)
+
 
 def rotation_matrix_loss(pred, target, alpha=0.1, beta=0.01):
     mse = torch.mean((pred - target) ** 2)

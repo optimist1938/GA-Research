@@ -11,6 +11,7 @@ from src.train_utils import (
     train,
     form_checkpoint,
     get_available_device,
+    rotor_loss,
     load_checkpoint,
     maybe_wrap_model_for_multi_gpu,
     rotation_matrix_loss,
@@ -67,7 +68,12 @@ def instantiate(config):
     elif config.model == "i2s_resnet":
         output_mode = config.i2s_resnet_output_mode
         if output_mode == "auto":
-            output_mode = "fourier" if config.loss == "prob" else "rotation_matrix"
+            if config.loss == "prob":
+                output_mode = "fourier"
+            elif config.loss == "rotor":
+                output_mode = "rotor"
+            else:
+                output_mode = "rotation_matrix"
         model = I2S_ResNet(
             algebra=algebra,
             lmax=config.lmax,
@@ -116,6 +122,8 @@ def instantiate(config):
         criterion = rotation_matrix_loss
     elif config.loss == "prob":
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
+    elif config.loss == "rotor":
+        criterion = rotor_loss
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
 
