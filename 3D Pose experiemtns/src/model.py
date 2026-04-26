@@ -542,8 +542,8 @@ class I2S_ResNet(nn.Module):
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
 
-        if output_mode not in {"auto", "rotation_matrix", "fourier"}:
-            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier")
+        if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor"}:
+            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor")
         self.output_mode = output_mode
 
         backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
