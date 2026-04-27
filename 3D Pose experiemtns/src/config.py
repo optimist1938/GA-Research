@@ -6,6 +6,7 @@ def create_argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--dataset", type=str, required=False, default="pascal")
     parser.add_argument("--path_to_datasets", type=str, required=True)
     parser.add_argument("--path_to_checkpoint",type=str,default=None)
     parser.add_argument("--run_name", type=str, default=None)
@@ -15,7 +16,7 @@ def create_argparser():
     parser.add_argument("--multiprocessing", type=bool, default=False)
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "dummynet"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     parser.add_argument("--encoder", type=str, default="resnet",

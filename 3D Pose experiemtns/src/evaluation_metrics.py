@@ -7,11 +7,13 @@ from tqdm import tqdm
 import numpy as np
 
 
-def create_technical_matrices(config):
+def create_technical_matrices(config=None, batch_size=None, device=None):
     global I
+    batch_size = config.batch_size if config else batch_size
+    device = config.device if config else device
     I = torch.eye(3)
-    I = torch.stack([I for _ in range(config.batch_size)])
-    I = I.to(config.device)
+    I = torch.stack([I for _ in range(batch_size)])
+    I = I.to(device)
     return I
 
 
@@ -22,6 +24,8 @@ def project_to_orthogonal_manifold(x):
     :param x: (B, 3, 3)
     returns : (B, 3, 3)
     '''
+    if x.shape[0] != I.shape[0]:
+        create_technical_matrices(batch_size=x.shape[0], device=x.device)
     N = len(x)
     u, _, v = torch.svd(x)
     determinants = torch.det(u @ v)

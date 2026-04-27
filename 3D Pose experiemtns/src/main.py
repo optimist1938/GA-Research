@@ -7,7 +7,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 from src.config import create_argparser
 from src.dataset import create_dataloaders
 from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
-from src.img_to_pcd_stuff import I2P
+from src.img_to_pcd_stuff import I2P, DummyNet
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
@@ -62,6 +62,8 @@ def instantiate(config):
             batch_size=config.batch_size,
             device = get_available_device()
         )
+    elif config.model == "dummynet":
+        model = DummyNet()
     else:
         raise ValueError(f"Unknown model: {config.model}")
     

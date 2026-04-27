@@ -157,3 +157,86 @@ class I2P(nn.Module):
         if not timeit:
             return out
         return out, pd.DataFrame(timings, columns=['line', 'time_sec'])
+
+class DummyNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.algebra = CliffordAlgebra((1, 1, 1))
+        self.tralalero = TralaleroTralala(self.algebra, in_features=2048, hidden_dim=[512, 128, 32])
+
+    def forward(self, x):
+        x = self.algebra.embed_grade(x, 1)
+        x = self.tralalero(x)
+        x = self.algebra.get_grade(x, 0)
+        return x.reshape(-1, 3, 3)
+
+def draw_clouds(points, colors=None, size=1):
+    if colors is not None:
+        fig = go.Figure(data=[go.Scatter3d(
+            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            mode='markers',
+            marker=dict(size=size, color=colors)
+        )])
+    else:
+        fig = go.Figure(data=[go.Scatter3d(
+            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            mode='markers',
+            marker=dict(size=size)
+        )])
+    
+    fig.update_layout(
+        scene=dict(xaxis_title='X (pixels)', yaxis_title='Y (pixels)', zaxis_title='Depth'),
+        title='3D Point Cloud'
+    )
+    fig.show()
+
+class MeshProcessor:
+    """
+    A utility class to visualize .off files in headless environments 
+    and convert 3D meshes to point cloud arrays.
+    """
+
+    @staticmethod
+    def visualize_in_notebook(file_path, color='lightpink'):
+        """Loads a mesh and renders it interactively using Plotly."""
+        mesh = o3d.io.read_triangle_mesh(file_path)
+        if not mesh.has_vertices():
+            raise ValueError(f"Could not load mesh from {file_path}")
+
+        verts = np.asarray(mesh.vertices)
+        triangles = np.asarray(mesh.triangles)
+
+        fig = go.Figure(data=[
+            go.Mesh3d(
+                x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+                i=triangles[:, 0], j=triangles[:, 1], k=triangles[:, 2],
+                color=color, opacity=0.6, flatshading=True
+            )
+        ])
+
+        fig.update_layout(
+            scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False),
+            margin=dict(l=0, r=0, b=0, t=0)
+        )
+        fig.show()
+
+    @staticmethod
+    def to_point_cloud_array(file_path, num_points=2048):
+        """
+        Loads a mesh and samples it into a point cloud.
+        Returns: np.ndarray of shape (num_points, 3)
+        """
+        mesh = o3d.io.read_triangle_mesh(file_path)
+        if not mesh.has_vertices():
+            raise ValueError(f"Could not load mesh from {file_path}")
+        pcd = mesh.sample_points_uniformly(number_of_points=num_points)
+        return np.asarray(pcd.points)
+
+
+if __name__ == "__main__":
+    file_path = "..."
+    MeshProcessor.visualize_in_notebook(file_path)
+    points = MeshProcessor.to_point_cloud_array(file_path, num_points=2048)
+    print(f"Point cloud shape: {points.shape}")
+
+    draw_clouds(points)

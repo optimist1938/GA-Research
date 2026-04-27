@@ -4,6 +4,11 @@ from image2sphere.pascal_dataset import Pascal3D
 from tqdm import tqdm
 import multiprocessing as mp
 from torch.utils.data import Dataset, DataLoader
+import pathlib
+from src.img_to_pcd_stuff import MeshProcessor
+from src.evaluation_metrics import project_to_orthogonal_manifold, create_technical_matrices
+import pandas as pd
+
 
 class PascalSanityCheckDataset(Dataset):
     def __init__(self, config):
@@ -139,7 +144,10 @@ class InMemoryDataset(Dataset):
 
 
 def create_dataloaders(config):
-    if not config.sanity_check:
+    if config.dataset == "dummynet":
+        train_dataset = DummyPointCloudDataset(config, size=10000)
+        val_dataset = DummyPointCloudDataset(config, size=1000)
+    elif not config.sanity_check:
         train = Pascal3D(config.path_to_datasets, train=True)
         val = Pascal3D(config.path_to_datasets, train=False)
         num_builder = 4 if config.platform == "kaggle" else 2
@@ -152,3 +160,26 @@ def create_dataloaders(config):
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=True,persistent_workers=persistent_workers)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=False,persistent_workers=persistent_workers)
     return train_loader, val_loader
+
+
+class DummyPointCloudDataset(Dataset):
+    def __init__(self, config=None, path : str = None, size : int = 42, num_points=2048):
+        super().__init__()
+        path = config.path_to_datasets if config else path
+        self.size = size
+        create_technical_matrices(batch_size=self.size, device="cpu")
+        self.base_path = pathlib.Path(path)
+        self.meta = pd.read_csv(self.base_path / "metadata_modelnet10.csv")
+        self.base_path /= "ModelNet10"
+        self.point_cloud = MeshProcessor.to_point_cloud_array(file_path=self.base_path / "bed/train/bed_0001.off", num_points=num_points)
+        self.num_points = num_points
+        self.rotmats = project_to_orthogonal_manifold(torch.rand(self.size, 3, 3))
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, i):
+        return {
+            "img" : torch.tensor(self.point_cloud, dtype=torch.float32) @ self.rotmats[i],
+            "rot" : self.rotmats[i]
+        }
