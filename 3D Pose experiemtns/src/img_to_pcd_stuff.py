@@ -163,11 +163,22 @@ class DummyNet(nn.Module):
         super().__init__()
         self.algebra = CliffordAlgebra((1, 1, 1))
         self.tralalero = TralaleroTralala(self.algebra, in_features=2048, hidden_dim=[512, 128, 32])
+        self.mlp = nn.Sequential(
+            nn.Linear(in_features=2048 * 3, out_features=1024 * 3),
+            nn.ReLU(),
+            nn.Linear(in_features=1024 * 3, out_features=256 * 3),
+            nn.ReLU(),
+            nn.Linear(in_features=256 * 3, out_features=128),
+            nn.ReLU(),
+            nn.Linear(in_features=128, out_features=9)
+        )
 
     def forward(self, x):
-        x = self.algebra.embed_grade(x, 1)
-        x = self.tralalero(x)
-        x = self.algebra.get_grade(x, 0)
+        # x = self.algebra.embed_grade(x, 1)
+        # x = self.tralalero(x)
+        # x = self.algebra.get_grade(x, 0)
+        x = x.flatten(1, -1)
+        x = self.mlp(x)
         return x.reshape(-1, 3, 3)
 
 def draw_clouds(points, colors=None, size=1):
