@@ -145,8 +145,8 @@ class InMemoryDataset(Dataset):
 
 def create_dataloaders(config):
     if config.dataset == "dummynet":
-        train_dataset = DummyPointCloudDataset(config, size=10000)
-        val_dataset = DummyPointCloudDataset(config, size=1000)
+        train_dataset = DummyPointCloudDataset(config, size=1000)
+        val_dataset = DummyPointCloudDataset(config, size=100)
     elif not config.sanity_check:
         train = Pascal3D(config.path_to_datasets, train=True)
         val = Pascal3D(config.path_to_datasets, train=False)
