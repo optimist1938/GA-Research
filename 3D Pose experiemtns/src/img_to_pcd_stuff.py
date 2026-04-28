@@ -158,7 +158,7 @@ class I2P(nn.Module):
             return out
         return out, pd.DataFrame(timings, columns=['line', 'time_sec'])
 
-class DummyNet(nn.Module):
+class PoseNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.algebra = CliffordAlgebra((1, 1, 1))
@@ -173,13 +173,65 @@ class DummyNet(nn.Module):
             nn.Linear(in_features=128, out_features=9)
         )
 
-    def forward(self, x):
+    def forward(self, x : torch.tensor):
+        '''
+        Args:
+            x : torch.tensor, point cloud of size (B, 3)
+        Returns:
+            x : rotation matrices of size (B, 3, 3)
+        '''
         # x = self.algebra.embed_grade(x, 1)
         # x = self.tralalero(x)
         # x = self.algebra.get_grade(x, 0)
         x = x.flatten(1, -1)
         x = self.mlp(x)
         return x.reshape(-1, 3, 3)
+
+class DummyNet(nn.Module):
+    def __init__(self, hidden_dim: int = 256):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 9),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: point cloud of shape (B, N, 3)
+        Returns:
+            rotation matrices of shape (B, 3, 3)
+        """
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        if x.dim() != 3 or x.size(-1) != 3:
+            raise ValueError(f"Expected input of shape (B, N, 3), got {tuple(x.shape)}")
+
+        feat = self.encoder(x)
+        feat = feat.max(dim=1).values
+        R = self.head(feat).view(-1, 3, 3)
+
+        U, _, Vh = torch.linalg.svd(R)
+        R = U @ Vh
+
+        det = torch.det(R)
+        mask = det < 0
+        if mask.any():
+            U[mask, :, -1] *= -1
+            R = U @ Vh
+
+        return R
+
 
 def draw_clouds(points, colors=None, size=1):
     if colors is not None:
