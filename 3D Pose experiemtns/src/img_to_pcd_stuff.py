@@ -164,29 +164,26 @@ class DummyNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.algebra = CliffordAlgebra((1, 1, 1))
-        self.tralalero = TralaleroTralala(self.algebra, in_features=2048, hidden_dim=[512, 128, 32])
-        self.mlp = nn.Sequential(
-            nn.Linear(in_features=2048 * 3, out_features=1024 * 3),
-            nn.ReLU(),
-            nn.Linear(in_features=1024 * 3, out_features=256 * 3),
-            nn.ReLU(),
-            nn.Linear(in_features=256 * 3, out_features=128),
-            nn.ReLU(),
-            nn.Linear(in_features=128, out_features=9)
-        )
+        self.tralalero = TralaleroTralala(self.algebra, in_features=1, hidden_dim=[32, 64, 128, 256])
+        self.head = MVLinear(self.algebra, in_features=256, out_features=9)
 
     def forward(self, x : torch.tensor):
         '''
         Args:
-            x : torch.tensor, point cloud of size (B, 3)
+            x : torch.tensor, point cloud of size (B, N, 3)
         Returns:
             x : rotation matrices of size (B, 3, 3)
         '''
-        # x = self.algebra.embed_grade(x, 1)
-        # x = self.tralalero(x)
-        # x = self.algebra.get_grade(x, 0)
-        x = x.flatten(1, -1)
-        x = self.mlp(x)
+        batch_size = x.shape[0]
+        x = self.algebra.embed_grade(x, 1)
+        x = x.reshape(-1, 1, 8)
+        x = self.tralalero(x)
+        x = x.max(dim=1).values
+        x = x.reshape(batch_size, 256, 8)
+        x = self.head(x)
+        x = self.algebra.get_grade(x, 0)
+        # x = x.flatten(1, -1)
+        # x = self.mlp(x)
         return x.reshape(-1, 3, 3)
 
 class PoseNet(nn.Module):
