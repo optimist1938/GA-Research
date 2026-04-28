@@ -220,16 +220,6 @@ class DummyNet(nn.Module):
         feat = self.encoder(x)
         feat = feat.max(dim=1).values
         R = self.head(feat).view(-1, 3, 3)
-
-        U, _, Vh = torch.linalg.svd(R)
-        R = U @ Vh
-
-        det = torch.det(R)
-        mask = det < 0
-        if mask.any():
-            U[mask, :, -1] *= -1
-            R = U @ Vh
-
         return R
 
 
