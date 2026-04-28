@@ -101,6 +101,20 @@ class I2P(nn.Module):
         self.batch_size = batch_size
         self.batched_point_clouds = None
         self._create_batched_clouds()
+        hidden_dim = 256
+        self.encoder = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 9),
+        )
 
 
     def _create_batched_clouds(self):
@@ -119,46 +133,33 @@ class I2P(nn.Module):
         self.batched_point_clouds = torch.cat([point_cloud.unsqueeze(0) for _ in range(self.batch_size)], dim=0)
 
 
-    def forward(self, x, cls_info : Optional[torch.Tensor] = None, timeit=False):
+    def forward(self, x, cls_info : Optional[torch.Tensor] = None):
         '''
         Args:
             x : torch.Tensor of size (B, C, H, W)
         '''
-        import time
-        import pandas as pd
-        
-        timings = []
         batch_size = x.size(0)
         if batch_size != self.batch_size:
             self.batch_size = batch_size
             self._create_batched_clouds()
-
-        t0 = time.perf_counter()
         x = self.depth_anything_model(x)
-        timings.append(('x = self.depth_anything_model(x)', time.perf_counter() - t0))
-
         x = torch.cat([
             self.batched_point_clouds[:, :, :, :2],
             x.squeeze(1).unsqueeze(-1)
         ], dim=-1)
-        x = self.algebra.embed_grade(self.batched_point_clouds.reshape(batch_size, -1, 3), 1)
-
-        t0 = time.perf_counter()
+        x = self.algebra.embed_grade(x, 1)
         x = self.projection(x)
-        timings.append(('x = self.projection(x)', time.perf_counter() - t0))
-
-        t0 = time.perf_counter()
         x = self.tralalero(x)
-        timings.append(('x = self.tralalero(x)', time.perf_counter() - t0))
-
         x = x.squeeze(1)
         x = self.head(x)
         out = x.reshape(batch_size, 3, 3)
-        if not timeit:
-            return out
-        return out, pd.DataFrame(timings, columns=['line', 'time_sec'])
+        # feat = self.encoder(x)
+        # feat = feat.max(dim=1).values
+        # R = self.head(feat).view(-1, 3, 3)
+        return out
 
-class PoseNet(nn.Module):
+
+class DummyNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.algebra = CliffordAlgebra((1, 1, 1))
@@ -187,7 +188,7 @@ class PoseNet(nn.Module):
         x = self.mlp(x)
         return x.reshape(-1, 3, 3)
 
-class DummyNet(nn.Module):
+class PoseNet(nn.Module):
     def __init__(self, hidden_dim: int = 256):
         super().__init__()
         self.encoder = nn.Sequential(
