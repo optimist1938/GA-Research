@@ -164,7 +164,7 @@ class DummyNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.algebra = CliffordAlgebra((1, 1, 1))
-        self.tralalero = TralaleroTralala(self.algebra, in_features=1, hidden_dim=[32, 64, 128, 256])
+        self.tralalero = TralaleroTralala(self.algebra, in_features=1, hidden_dim=[8, 16, 32, 64])
         self.head = MVLinear(self.algebra, in_features=256, out_features=9)
 
     def forward(self, x : torch.tensor):
@@ -179,7 +179,7 @@ class DummyNet(nn.Module):
         x = x.reshape(-1, 1, 8)
         x = self.tralalero(x)
         x = x.max(dim=1).values
-        x = x.reshape(batch_size, 256, 8)
+        x = x.reshape(batch_size, 64, 8)
         x = self.head(x)
         x = self.algebra.get_grade(x, 0)
         # x = x.flatten(1, -1)
