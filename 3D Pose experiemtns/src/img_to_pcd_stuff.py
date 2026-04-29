@@ -102,19 +102,19 @@ class I2P(nn.Module):
         self.batched_point_clouds = None
         self._create_batched_clouds()
         hidden_dim = 256
-        # self.encoder = nn.Sequential(
-        #     nn.Linear(3, 64),
-        #     nn.ReLU(inplace=True),
-        #     nn.Linear(64, 128),
-        #     nn.ReLU(inplace=True),
-        #     nn.Linear(128, hidden_dim),
-        #     nn.ReLU(inplace=True),
-        # )
-        # self.head = nn.Sequential(
-        #     nn.Linear(hidden_dim, hidden_dim),
-        #     nn.ReLU(inplace=True),
-        #     nn.Linear(hidden_dim, 9),
-        # )
+        self.encoder = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 9),
+        )
 
 
     def _create_batched_clouds(self):
@@ -148,15 +148,16 @@ class I2P(nn.Module):
             x.squeeze(1).unsqueeze(-1)
         ], dim=-1)
         x = x.reshape(batch_size, -1, 3)
-        x = self.algebra.embed_grade(x, 1)
-        x = self.projection(x)
-        x = self.tralalero(x)
-        x = x.squeeze(1)
-        x = self.head(x)
-        out = x.reshape(batch_size, 3, 3)
-        # feat = self.encoder(x)
-        # feat = feat.max(dim=1).values
-        # R = self.head(feat).view(-1, 3, 3)
+        # x = self.algebra.embed_grade(x, 1)
+        # x = self.projection(x)
+        # x = self.tralalero(x)
+        # x = x.squeeze(1)
+        # x = self.head(x)
+        # out = x.reshape(batch_size, 3, 3)
+        feat = self.encoder(x)
+        feat = feat.max(dim=1).values
+        R = self.head(feat).view(-1, 3, 3)
+        out = R
         return out
 
 
