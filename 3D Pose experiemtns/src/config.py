@@ -33,7 +33,7 @@ def create_argparser():
         "--i2s_resnet_output_mode",
         type=str,
         default="auto",
-        choices=["auto", "rotation_matrix", "fourier"],
+        choices=["auto", "rotation_matrix", "fourier", "vector_proj"],
     )
     parser.add_argument(
         "--i2s_resnet_pretrained_backbone",
@@ -54,7 +54,7 @@ def create_argparser():
         "--i2s_resnet_adapter_type",
         type=str,
         default="conv",
-        choices=["conv", "mlp_block", "linear", "geometric"],
+        choices=["conv", "mlp_block", "linear", "geometric", "inc"],
     )
     parser.add_argument(
         "--i2s_resnet_head_type",

@@ -307,6 +307,21 @@ class _CliffordInteraction(nn.Module):
         return self.proj(torch.cat(feats, dim=1))
 
 
+class _VectorIncAdapter(nn.Module):
+    def __init__(self, in_ch: int, out_hw: int):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d((out_hw, out_hw))
+        self.fc = nn.Linear(in_ch, 3)   # project to the 3 grade-1 components
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pool(x)
+        B, C, H, W = x.shape
+        v = self.fc(x.permute(0, 2, 3, 1).reshape(B * H * W, C))   # [B*HW, 3]
+        mv = torch.zeros(B * H * W, 8, device=x.device, dtype=x.dtype)
+        mv[:, 1:4] = v                  # embed into e1,e2,e3 slots
+        return mv.reshape(B, H, W, 8).permute(0, 3, 1, 2).contiguous()
+
+
 class _GeometricAdapter(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, out_hw: int):
         super().__init__()
@@ -542,8 +557,8 @@ class I2S_ResNet(nn.Module):
         if self._mv_dim != 8:
             raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
 
-        if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor"}:
-            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor")
+        if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "vector_proj"}:
+            raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor, vector_proj")
         self.output_mode = output_mode
 
         backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
@@ -569,6 +584,8 @@ class I2S_ResNet(nn.Module):
             self.conv_adapter = _LinearAdapter(2048, self._mv_dim, self.conv_adapter_output)
         elif adapter_type == "geometric":
             self.conv_adapter = _GeometricAdapter(2048, self._mv_dim, self.conv_adapter_output)
+        elif adapter_type == "inc":
+            self.conv_adapter = _VectorIncAdapter(2048, self.conv_adapter_output)
         else:
             self.conv_adapter = nn.Sequential(
                 nn.Conv2d(2048, 256, kernel_size=1, bias=False),
@@ -625,6 +642,21 @@ class I2S_ResNet(nn.Module):
                 out_features=1,
             )
 
+        if output_mode == "vector_proj":
+            self.grade1_proj = nn.Linear(self._mv_dim, 3)   
+            self.ga_head_vector_proj = TralaleroTralala(
+                algebra=algebra,
+                in_features=self._n_mv,
+                hidden_dim=hidden_dim,
+                out_features=9,
+            )
+            hd = hidden_dim[0] if isinstance(hidden_dim, list) else int(hidden_dim)
+            self.vector_proj_mlp = nn.Sequential(
+                nn.Linear(9 * 3, hd),  
+                nn.ReLU(),
+                nn.Linear(hd, 9),
+            )
+
         xyx = so3_healpix_grid(rec_level=self.rec_level)
         wign = flat_wigner(self.lmax, *xyx)
         self.register_buffer("so3_xyx", xyx, persistent=False)
@@ -667,6 +699,13 @@ class I2S_ResNet(nn.Module):
         if mode == "rotor":
             rotor_mv = self.ga_head_rotor(tokens)   # [B, 1, 8]
             return rotor_mv.squeeze(1)               # [B, 8]
+        if mode == "vector_proj":
+            v = self.grade1_proj(tokens)                       # [B, 256, 3]
+            tokens_g1 = torch.zeros_like(tokens)
+            tokens_g1[:, :, 1:4] = v                           
+            out_mv = self.ga_head_vector_proj(tokens_g1)       # [B, 9, 8]
+            v_out = out_mv[:, :, 1:4].reshape(x.shape[0], -1) # proj: grade-1 → [B, 27]
+            return self.vector_proj_mlp(v_out).reshape(x.shape[0], 3, 3)
         raise ValueError(f"Unsupported mode: {mode}")
 
     def logits_on_grid(self, coeffs: torch.Tensor) -> torch.Tensor:
