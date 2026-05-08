@@ -6,12 +6,13 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet, IPDF_ResNet
 from src.train_utils import (
     train,
     form_checkpoint,
     get_available_device,
     rotor_loss,
+    ipdf_loss,
     load_checkpoint,
     maybe_wrap_model_for_multi_gpu,
     rotation_matrix_loss,
@@ -87,6 +88,15 @@ def instantiate(config):
             adapter_type=config.i2s_resnet_adapter_type,
             head_type=config.i2s_resnet_head_type,
         )
+    elif config.model == "ipdf":
+        model = IPDF_ResNet(
+            algebra=algebra,
+            hidden_dim=config.hidden_dim,
+            n_queries=config.ipdf_n_queries,
+            pretrained_backbone=config.i2s_resnet_pretrained_backbone,
+            freeze_backbone=config.i2s_resnet_freeze_backbone,
+            rec_level=config.rec_level,
+        )
     else:
         raise ValueError(f"Unknown model: {config.model}")
     
@@ -124,6 +134,8 @@ def instantiate(config):
         criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     elif config.loss == "rotor":
         criterion = rotor_loss
+    elif config.loss == "ipdf":
+        criterion = ipdf_loss
     else:
         raise ValueError(f"Unknown loss: {config.loss}")
 

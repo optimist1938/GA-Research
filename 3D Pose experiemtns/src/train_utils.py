@@ -6,6 +6,11 @@ from src.evaluation_metrics import calculate_evaluation_metrics
 import numpy as np
 from src.model import _rotmat_to_rotor
 
+def ipdf_loss(logits: torch.Tensor) -> torch.Tensor:
+    targets = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
+    return torch.nn.functional.cross_entropy(logits, targets)
+
+
 def rotor_loss(pred: torch.Tensor, target: torch.Tensor, w_odd: float = 0.5) -> torch.Tensor:
     target_rotor = _rotmat_to_rotor(target)                            # [B, 8]
 
@@ -114,11 +119,15 @@ def _compute_loss(model, data, criterion, config):
 
     unwrapped_model = unwrap_model(model)
 
-    if clas is not None and _supports_class_argument(unwrapped_model.forward):
+    if config.loss == "ipdf":
+        outputs = model(img, targets)
+    elif clas is not None and _supports_class_argument(unwrapped_model.forward):
         outputs = model(img, clas)
     else:
         outputs = model(img)
 
+    if config.loss == "ipdf":
+        return criterion(outputs)
     if config.loss == "prob":
         idx = _call_model_method(model, "get_nearest_idx", targets).long().view(-1)
         return criterion(outputs, idx)
