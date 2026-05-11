@@ -36,7 +36,7 @@ class PointCloudProcessor(nn.Module):
 
 
 class I2P(nn.Module):
-    def __init__(self, model_size="small", n_points=2048, hidden_dim=256, device: Optional[str] = None, freeze_backbone=True):
+    def __init__(self, model_size="base", n_points=2048, hidden_dim=256, device: Optional[str] = None, freeze_backbone=True):
         super().__init__()
         dims = {"small": 384, "base": 768, "large": 1024}
         c = dims[model_size]
