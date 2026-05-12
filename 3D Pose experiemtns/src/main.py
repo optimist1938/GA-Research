@@ -59,14 +59,9 @@ def instantiate(config):
             ga_pool_hw=tuple(config.ga_pool_hw),
         )
     elif config.model == "image2pcd":
-        model = I2P(
-            device=get_available_device(),
-            pool_hw=config.pool_hw,
-        )
+        model = I2P()
     elif config.model == "image2pcd_ipdf":
         model = I2P_IPDF(
-            device=get_available_device(),
-            pool_hw=config.pool_hw,
             rec_level=config.rec_level,
             n_train_queries=config.n_train_queries,
             pe_freqs=config.pe_freqs,
