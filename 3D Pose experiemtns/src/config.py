@@ -16,7 +16,7 @@ def create_argparser():
     parser.add_argument("--multiprocessing", type=bool, default=False)
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "dummynet"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     parser.add_argument("--encoder", type=str, default="resnet",
@@ -31,6 +31,11 @@ def create_argparser():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+
+    # I2P / I2P_IPDF
+    parser.add_argument("--pe_freqs", type=int, default=4)
+    parser.add_argument("--n_train_queries", type=int, default=2048)
+    parser.add_argument("--pool_hw", type=int, default=16)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 

@@ -8,7 +8,7 @@ from src.config import create_argparser
 from src.dataset import create_dataloaders
 from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
 # from src.img_to_pcd_stuff import I2P, DummyNet
-from src.img_to_pcd_2 import I2P
+from src.img_to_pcd_2 import I2P, I2P_IPDF
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
 from src.evaluation_metrics import calculate_evaluation_metrics,create_technical_matrices
 from src.wandb_utils import (
@@ -60,8 +60,16 @@ def instantiate(config):
         )
     elif config.model == "image2pcd":
         model = I2P(
-            # batch_size=config.batch_size,
-            device = get_available_device()
+            device=get_available_device(),
+            pool_hw=config.pool_hw,
+        )
+    elif config.model == "image2pcd_ipdf":
+        model = I2P_IPDF(
+            device=get_available_device(),
+            pool_hw=config.pool_hw,
+            rec_level=config.rec_level,
+            n_train_queries=config.n_train_queries,
+            pe_freqs=config.pe_freqs,
         )
     elif config.model == "dummynet":
         model = DummyNet()
