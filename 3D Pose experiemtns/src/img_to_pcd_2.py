@@ -78,7 +78,8 @@ class I2P(nn.Module):
         grid = torch.stack((v, u), dim=-1).unsqueeze(0).expand(b, -1, -1, -1)
         pts = torch.cat((grid, depth.unsqueeze(-1)), dim=-1).reshape(b, -1, 3)
         feat = feat.permute(0, 2, 3, 1).reshape(b, -1, 128)
-        pts = torch.cat((pts, feat), dim=-1)
+        # pts = torch.cat((pts, feat), dim=-1)
+        pts = torch.cat((torch.zeros(pts.shape), feat), dim=-1)
         if pts.shape[1] > self.n_points:
             idx = torch.randperm(pts.shape[1], device=x.device)[:self.n_points]
             pts = pts[:, idx]
