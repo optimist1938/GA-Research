@@ -16,11 +16,22 @@ def create_argparser():
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "i2s_resnet", "i2s_convnext"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob", "rotor"])
     parser.add_argument("--encoder", type=str, default="resnet",
-                        choices=["resnet", "ga", "ga_canonical"])
+                        choices=["resnet", "ga", "ga_canonical",
+                                 "convnext_tiny", "convnext_small", "convnext_base", "convnext_large"])
+    parser.add_argument(
+        "--encoder_pretrained",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--encoder_frozen",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)
@@ -62,6 +73,48 @@ def create_argparser():
         default="ga",
         choices=["ga", "mlp"],
     )
+
+    # ConvNext backbone model (i2s_convnext)
+    parser.add_argument(
+        "--i2s_convnext_variant",
+        type=str,
+        default="tiny",
+        choices=["tiny", "small", "base", "large"],
+    )
+    parser.add_argument(
+        "--i2s_convnext_output_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "rotation_matrix", "fourier", "vector_proj"],
+    )
+    parser.add_argument(
+        "--i2s_convnext_pretrained_backbone",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--i2s_convnext_freeze_backbone",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--i2s_convnext_use_positional_encoding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--i2s_convnext_adapter_type",
+        type=str,
+        default="conv",
+        choices=["conv", "mlp_block", "linear", "geometric", "inc"],
+    )
+    parser.add_argument(
+        "--i2s_convnext_head_type",
+        type=str,
+        default="ga",
+        choices=["ga", "mlp"],
+    )
+
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--multi_gpu", action=argparse.BooleanOptionalAction, default=True)

@@ -120,6 +120,8 @@ class I2S(nn.Module):
         hidden_dim: List = [32],
         temperature: float = 1.0,
         encoder_type: str = "resnet",
+        encoder_pretrained: bool = True,
+        encoder_frozen: bool = False,
     ):
         super().__init__()
         self.algebra = algebra
@@ -127,7 +129,7 @@ class I2S(nn.Module):
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
 
-        self.encoder = build_encoder(encoder_type)
+        self.encoder = build_encoder(encoder_type, pretrained=encoder_pretrained, frozen=encoder_frozen)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         enc_channels = getattr(self.encoder, "output_shape", None)[0]
@@ -452,7 +454,8 @@ class TralaleroTralala(nn.Module):
 
 
 class TralaleroCompetitor(nn.Module):
-    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
+    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28),
+                 encoder_pretrained: bool = True, encoder_frozen: bool = False):
         super().__init__()
         self.algebra = algebra
         self._use_ga_backbone = encoder_type in {"ga", "ga_canonical"}
@@ -466,11 +469,11 @@ class TralaleroCompetitor(nn.Module):
                 raise ValueError("ga_pool_hw values must be positive")
 
             self.pre_encode_pool = nn.AdaptiveAvgPool2d(self.ga_pool_hw)
-            self.backbone = build_encoder(encoder_type)
+            self.backbone = build_encoder(encoder_type, pretrained=encoder_pretrained, frozen=encoder_frozen)
             self._n_mv = int(self.ga_pool_hw[0] * self.ga_pool_hw[1])
         else:
             self._n_mv = 8
-            self.backbone = build_encoder(encoder_type)
+            self.backbone = build_encoder(encoder_type, pretrained=encoder_pretrained, frozen=encoder_frozen)
             self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
             enc_channels = getattr(self.backbone, "output_shape", None)[0]
             self.projective_matrix = nn.Linear(enc_channels, self._n_mv * self._mv_dim)
@@ -513,9 +516,9 @@ class TralaleroCompetitor(nn.Module):
 
 
 class MLPBaseline(nn.Module):
-    def __init__(self, encoder_type: str = "resnet"):
+    def __init__(self, encoder_type: str = "resnet", encoder_pretrained: bool = True, encoder_frozen: bool = False):
         super().__init__()
-        self.backbone = build_encoder(encoder_type)
+        self.backbone = build_encoder(encoder_type, pretrained=encoder_pretrained, frozen=encoder_frozen)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         enc_channels = getattr(self.backbone, "output_shape", None)[0]
         self.linear_head = nn.Linear(in_features=enc_channels, out_features=9)
@@ -530,16 +533,20 @@ class MLPBaseline(nn.Module):
         return x
 
 
-class I2S_ResNet(nn.Module):
+
+
+class _I2S_ConvBase(nn.Module):
+    """Shared backbone-agnostic logic for I2S_ResNet and I2S_ConvNext."""
+
     def __init__(
         self,
         algebra,
+        backbone: nn.Module,
+        backbone_channels: int,
         lmax: int = 6,
         rec_level: int = 3,
         hidden_dim: List = [32],
         temperature: float = 1.0,
-        pretrained_backbone: bool = True,
-        freeze_backbone: bool = True,
         use_positional_encoding: bool = True,
         output_mode: str = "auto",
         adapter_type: str = "conv",
@@ -555,49 +562,31 @@ class I2S_ResNet(nn.Module):
         self.conv_adapter_output = 16
         self._n_mv = self.conv_adapter_output**2
         if self._mv_dim != 8:
-            raise ValueError(f"I2S_ResNet expects mv_dim=8, got {self._mv_dim}")
+            raise ValueError(f"Expects mv_dim=8, got {self._mv_dim}")
 
         if output_mode not in {"auto", "rotation_matrix", "fourier", "rotor", "vector_proj"}:
             raise ValueError("output_mode must be one of: auto, rotation_matrix, fourier, rotor, vector_proj")
         self.output_mode = output_mode
 
-        backbone_weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
-        resnet = torchvision.models.resnet50(weights=backbone_weights)
-        self.backbone = nn.Sequential(
-            resnet.conv1,
-            resnet.bn1,
-            resnet.relu,
-            resnet.maxpool,
-            resnet.layer1,
-            resnet.layer2,
-            resnet.layer3,
-            resnet.layer4,
-        )
-
-        if freeze_backbone:
-            for p in self.backbone.parameters():
-                p.requires_grad = False
+        self.backbone = backbone
 
         if adapter_type == "mlp_block":
-            self.conv_adapter = _MLPBlockAdapter(2048, self._mv_dim, self.conv_adapter_output)
+            self.conv_adapter = _MLPBlockAdapter(backbone_channels, self._mv_dim, self.conv_adapter_output)
         elif adapter_type == "linear":
-            self.conv_adapter = _LinearAdapter(2048, self._mv_dim, self.conv_adapter_output)
+            self.conv_adapter = _LinearAdapter(backbone_channels, self._mv_dim, self.conv_adapter_output)
         elif adapter_type == "geometric":
-            self.conv_adapter = _GeometricAdapter(2048, self._mv_dim, self.conv_adapter_output)
+            self.conv_adapter = _GeometricAdapter(backbone_channels, self._mv_dim, self.conv_adapter_output)
         elif adapter_type == "inc":
-            self.conv_adapter = _VectorIncAdapter(2048, self.conv_adapter_output)
+            self.conv_adapter = _VectorIncAdapter(backbone_channels, self.conv_adapter_output)
         else:
             self.conv_adapter = nn.Sequential(
-                nn.Conv2d(2048, 256, kernel_size=1, bias=False),
+                nn.Conv2d(backbone_channels, 256, kernel_size=1, bias=False),
                 nn.BatchNorm2d(256),
                 nn.SiLU(inplace=True),
-
                 nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
                 nn.BatchNorm2d(64),
                 nn.SiLU(inplace=True),
-
                 nn.Conv2d(64, self._mv_dim, kernel_size=1, bias=True),
-
                 nn.AdaptiveAvgPool2d((self.conv_adapter_output, self.conv_adapter_output)),
             )
 
@@ -609,50 +598,38 @@ class I2S_ResNet(nn.Module):
         self.num_coeffs = _so3_num_fourier_coeffs(self.lmax)
         if head_type == "mlp":
             self.ga_head_fourier = MLPHead(
-                in_features=self._n_mv,
-                mv_dim=self._mv_dim,
-                out_features=self.num_coeffs,
-                hidden_dim=hidden_dim,
+                in_features=self._n_mv, mv_dim=self._mv_dim,
+                out_features=self.num_coeffs, hidden_dim=hidden_dim,
             )
             self.ga_head_rotation = MLPHead(
-                in_features=self._n_mv,
-                mv_dim=self._mv_dim,
-                out_features=9,
-                hidden_dim=hidden_dim,
+                in_features=self._n_mv, mv_dim=self._mv_dim,
+                out_features=9, hidden_dim=hidden_dim,
             )
         else:
             self.ga_head_fourier = TralaleroTralala(
-                algebra=algebra,
-                in_features=self._n_mv,
-                hidden_dim=hidden_dim,
-                out_features=self.num_coeffs,
+                algebra=algebra, in_features=self._n_mv,
+                hidden_dim=hidden_dim, out_features=self.num_coeffs,
             )
             self.ga_head_rotation = TralaleroTralala(
-                algebra=algebra,
-                in_features=self._n_mv,
-                hidden_dim=hidden_dim,
-                out_features=9,
+                algebra=algebra, in_features=self._n_mv,
+                hidden_dim=hidden_dim, out_features=9,
             )
 
         if output_mode == "rotor":
             self.ga_head_rotor = TralaleroTralala(
-                algebra=algebra,
-                in_features=self._n_mv,
-                hidden_dim=hidden_dim,
-                out_features=1,
+                algebra=algebra, in_features=self._n_mv,
+                hidden_dim=hidden_dim, out_features=1,
             )
 
         if output_mode == "vector_proj":
-            self.grade1_proj = nn.Linear(self._mv_dim, 3)   
+            self.grade1_proj = nn.Linear(self._mv_dim, 3)
             self.ga_head_vector_proj = TralaleroTralala(
-                algebra=algebra,
-                in_features=self._n_mv,
-                hidden_dim=hidden_dim,
-                out_features=9,
+                algebra=algebra, in_features=self._n_mv,
+                hidden_dim=hidden_dim, out_features=9,
             )
             hd = hidden_dim[0] if isinstance(hidden_dim, list) else int(hidden_dim)
             self.vector_proj_mlp = nn.Sequential(
-                nn.Linear(9 * 3, hd),  
+                nn.Linear(9 * 3, hd),
                 nn.ReLU(),
                 nn.Linear(hd, 9),
             )
@@ -673,7 +650,10 @@ class I2S_ResNet(nn.Module):
         adapted = self.conv_adapter(fmap)
         b, c, h, w = adapted.shape
         if (c, h, w) != (self._mv_dim, self.conv_adapter_output, self.conv_adapter_output):
-            raise RuntimeError(f"Expected adapted features [B, {self._mv_dim}, {self.conv_adapter_output}, {self.conv_adapter_output}], got [B, {c}, {h}, {w}]")
+            raise RuntimeError(
+                f"Expected adapted features [B, {self._mv_dim}, {self.conv_adapter_output}, "
+                f"{self.conv_adapter_output}], got [B, {c}, {h}, {w}]"
+            )
         tokens = adapted.flatten(2).transpose(1, 2)
         if self.use_positional_encoding:
             tokens = tokens + self.positional_embedding
@@ -690,21 +670,18 @@ class I2S_ResNet(nn.Module):
             coeffs_mv = self.ga_head_fourier(tokens)
             coeffs = coeffs_mv[..., 0]
             logits = self.logits_on_grid(coeffs)
-            logits = logits / max(self.temperature, 1e-8)
-            return logits
+            return logits / max(self.temperature, 1e-8)
         if mode == "rotation_matrix":
             rot_mv = self.ga_head_rotation(tokens)
-            rot = rot_mv[..., 0].reshape(x.shape[0], 3, 3)
-            return rot
+            return rot_mv[..., 0].reshape(x.shape[0], 3, 3)
         if mode == "rotor":
-            rotor_mv = self.ga_head_rotor(tokens)   # [B, 1, 8]
-            return rotor_mv.squeeze(1)               # [B, 8]
+            return self.ga_head_rotor(tokens).squeeze(1)
         if mode == "vector_proj":
-            v = self.grade1_proj(tokens)                       # [B, 256, 3]
+            v = self.grade1_proj(tokens)
             tokens_g1 = torch.zeros_like(tokens)
-            tokens_g1[:, :, 1:4] = v                           
-            out_mv = self.ga_head_vector_proj(tokens_g1)       # [B, 9, 8]
-            v_out = out_mv[:, :, 1:4].reshape(x.shape[0], -1) # proj: grade-1 → [B, 27]
+            tokens_g1[:, :, 1:4] = v
+            out_mv = self.ga_head_vector_proj(tokens_g1)
+            v_out = out_mv[:, :, 1:4].reshape(x.shape[0], -1)
             return self.vector_proj_mlp(v_out).reshape(x.shape[0], 3, 3)
         raise ValueError(f"Unsupported mode: {mode}")
 
@@ -719,15 +696,70 @@ class I2S_ResNet(nn.Module):
 
     @torch.no_grad()
     def predict_rotmat(self, coeffs: torch.Tensor) -> torch.Tensor:
-        probs = self.probs_on_grid(coeffs)
-        idx = torch.argmax(probs, dim=-1)
-        return idx
+        return torch.argmax(self.probs_on_grid(coeffs), dim=-1)
 
     @torch.no_grad()
     def predict(self, x):
-        idx = self.predict_rotmat(self.forward(x))
-        return self.so3_rotmats_cache[idx]
+        return self.so3_rotmats_cache[self.predict_rotmat(self.forward(x))]
 
     @torch.no_grad()
     def get_nearest_idx(self, rot_gt: torch.Tensor):
         return nearest_rotmat(rot_gt, self.so3_rotmats_cache)
+
+
+class I2S_ResNet(_I2S_ConvBase):
+    def __init__(
+        self,
+        algebra,
+        lmax: int = 6,
+        rec_level: int = 3,
+        hidden_dim: List = [32],
+        temperature: float = 1.0,
+        pretrained_backbone: bool = True,
+        freeze_backbone: bool = True,
+        use_positional_encoding: bool = True,
+        output_mode: str = "auto",
+        adapter_type: str = "conv",
+        head_type: str = "ga",
+    ):
+        weights = torchvision.models.ResNet50_Weights.DEFAULT if pretrained_backbone else None
+        resnet = torchvision.models.resnet50(weights=weights)
+        backbone = nn.Sequential(
+            resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool,
+            resnet.layer1, resnet.layer2, resnet.layer3, resnet.layer4,
+        )
+        if freeze_backbone:
+            for p in backbone.parameters():
+                p.requires_grad = False
+        super().__init__(
+            algebra, backbone, backbone_channels=2048,
+            lmax=lmax, rec_level=rec_level, hidden_dim=hidden_dim,
+            temperature=temperature, use_positional_encoding=use_positional_encoding,
+            output_mode=output_mode, adapter_type=adapter_type, head_type=head_type,
+        )
+
+
+class I2S_ConvNext(_I2S_ConvBase):
+    def __init__(
+        self,
+        algebra,
+        lmax: int = 6,
+        rec_level: int = 3,
+        hidden_dim: List = [32],
+        temperature: float = 1.0,
+        variant: str = "tiny",
+        pretrained_backbone: bool = True,
+        freeze_backbone: bool = True,
+        use_positional_encoding: bool = True,
+        output_mode: str = "auto",
+        adapter_type: str = "conv",
+        head_type: str = "ga",
+    ):
+        from src.image_encoders import ConvNextEncoder
+        encoder = ConvNextEncoder(variant=variant, pretrained=pretrained_backbone, frozen=freeze_backbone)
+        super().__init__(
+            algebra, encoder.features, backbone_channels=encoder.output_shape[0],
+            lmax=lmax, rec_level=rec_level, hidden_dim=hidden_dim,
+            temperature=temperature, use_positional_encoding=use_positional_encoding,
+            output_mode=output_mode, adapter_type=adapter_type, head_type=head_type,
+        )

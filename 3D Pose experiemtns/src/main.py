@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, I2S_ResNet, I2S_ConvNext
 from src.train_utils import (
     train,
     form_checkpoint,
@@ -30,6 +30,12 @@ def _make_algebra():
     return CliffordAlgebra((1, 1, 1))
 
 
+def _resolve_output_mode(mode: str, loss: str) -> str:
+    if mode != "auto":
+        return mode
+    return {"prob": "fourier", "rotor": "rotor"}.get(loss, "rotation_matrix")
+
+
 def instantiate(config):
     train_loader, val_loader = create_dataloaders(config)
     print("Created Tralaloaders")
@@ -41,9 +47,15 @@ def instantiate(config):
             algebra,
             encoder_type=config.encoder,
             ga_pool_hw=tuple(config.ga_pool_hw),
+            encoder_pretrained=config.encoder_pretrained,
+            encoder_frozen=config.encoder_frozen,
         )
     elif config.model == "mlp":
-        model = MLPBaseline(encoder_type=config.encoder)
+        model = MLPBaseline(
+            encoder_type=config.encoder,
+            encoder_pretrained=config.encoder_pretrained,
+            encoder_frozen=config.encoder_frozen,
+        )
     elif config.model == "i2s":
         model = I2S(
             algebra=algebra,
@@ -53,6 +65,8 @@ def instantiate(config):
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
             encoder_type=config.encoder,
+            encoder_pretrained=config.encoder_pretrained,
+            encoder_frozen=config.encoder_frozen,
         )
     elif config.model == "ga_i2s":
         model = GA_I2S(
@@ -66,14 +80,6 @@ def instantiate(config):
             ga_pool_hw=tuple(config.ga_pool_hw),
         )
     elif config.model == "i2s_resnet":
-        output_mode = config.i2s_resnet_output_mode
-        if output_mode == "auto":
-            if config.loss == "prob":
-                output_mode = "fourier"
-            elif config.loss == "rotor":
-                output_mode = "rotor"
-            else:
-                output_mode = "rotation_matrix"
         model = I2S_ResNet(
             algebra=algebra,
             lmax=config.lmax,
@@ -83,9 +89,24 @@ def instantiate(config):
             pretrained_backbone=config.i2s_resnet_pretrained_backbone,
             freeze_backbone=config.i2s_resnet_freeze_backbone,
             use_positional_encoding=config.i2s_resnet_use_positional_encoding,
-            output_mode=output_mode,
+            output_mode=_resolve_output_mode(config.i2s_resnet_output_mode, config.loss),
             adapter_type=config.i2s_resnet_adapter_type,
             head_type=config.i2s_resnet_head_type,
+        )
+    elif config.model == "i2s_convnext":
+        model = I2S_ConvNext(
+            algebra=algebra,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            hidden_dim=config.hidden_dim,
+            temperature=config.temperature,
+            variant=config.i2s_convnext_variant,
+            pretrained_backbone=config.i2s_convnext_pretrained_backbone,
+            freeze_backbone=config.i2s_convnext_freeze_backbone,
+            use_positional_encoding=config.i2s_convnext_use_positional_encoding,
+            output_mode=_resolve_output_mode(config.i2s_convnext_output_mode, config.loss),
+            adapter_type=config.i2s_convnext_adapter_type,
+            head_type=config.i2s_convnext_head_type,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

@@ -129,7 +129,45 @@ class ImageEncoder(nn.Module):
     return self.layers(x)
 
 
-def build_encoder(encoder_type: str):
+_CONVNEXT_CFGS = {
+    "tiny":  ("convnext_tiny",  "ConvNeXt_Tiny_Weights"),
+    "small": ("convnext_small", "ConvNeXt_Small_Weights"),
+    "base":  ("convnext_base",  "ConvNeXt_Base_Weights"),
+    "large": ("convnext_large", "ConvNeXt_Large_Weights"),
+}
+
+
+class ConvNextEncoder(nn.Module):
+  """torchvision ConvNeXt backbone returning a spatial feature map."""
+
+  def __init__(self, variant: str = "tiny", pretrained: bool = True, frozen: bool = False):
+    super().__init__()
+    import torchvision
+
+    if variant not in _CONVNEXT_CFGS:
+      raise ValueError(f"Unknown ConvNext variant '{variant}'. Choose from: {list(_CONVNEXT_CFGS)}")
+
+    model_fn_name, weights_cls_name = _CONVNEXT_CFGS[variant]
+    model_fn = getattr(torchvision.models, model_fn_name)
+    weights = getattr(torchvision.models, weights_cls_name).DEFAULT if pretrained else None
+    model = model_fn(weights=weights)
+
+    self.features = model.features
+
+    if frozen:
+      for p in self.features.parameters():
+        p.requires_grad = False
+
+    with torch.no_grad():
+      dummy = torch.zeros(1, 3, 224, 224)
+      out = self.features(dummy)
+    self.output_shape = tuple(out.shape[1:])
+
+  def forward(self, x: torch.Tensor) -> torch.Tensor:
+    return self.features(x)
+
+
+def build_encoder(encoder_type: str, pretrained: bool = True, frozen: bool = False):
   if encoder_type == "resnet":
     from image2sphere.models import ResNet
     return ResNet()
@@ -137,4 +175,7 @@ def build_encoder(encoder_type: str):
     return GAEncoder()
   if encoder_type == "ga_canonical":
     return GAEncoderCanonical()
+  if encoder_type.startswith("convnext_"):
+    variant = encoder_type[len("convnext_"):]
+    return ConvNextEncoder(variant=variant, pretrained=pretrained, frozen=frozen)
   raise ValueError(f"Unknown encoder type: {encoder_type}")
