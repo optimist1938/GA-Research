@@ -134,21 +134,32 @@ class I2P_IPDF(nn.Module):
       first layer: W_img * img_emb  +  W_rot * rot_PE          (IPDF batching trick)
       -> 3 more hidden layers (256) + ReLU -> scalar logit
 
-    Training loss: NLL  -log p(R_GT | x) via softmax over N sampled rotations.
-    Inference:     argmax over a HEALPix SO(3) grid.
+    Training loss: NLL  -log p(R_GT | x) via softmax over n_train_queries rotations.
+    Inference:     chunked argmax over HEALPix SO(3) grid + gradient ascent refinement.
+
+    Grid sizes (72 * 8^rec_level):
+        rec_level=2 ->   4,608 pts  (used for training queries in original paper)
+        rec_level=3 ->  36,864 pts  (recommended eval grid)
+        rec_level=4 -> 294,912 pts  (high-quality eval, slower)
     """
 
     def __init__(
         self,
         model_size: str = "base",
         freeze_backbone: bool = True,
-        rec_level: int = 2,
-        n_train_queries: int = 2048,
+        rec_level: int = 3,
+        n_train_queries: int = 4096,
         pe_freqs: int = 4,
+        eval_chunk_size: int = 4096,
+        grad_ascent_steps: int = 100,
+        grad_ascent_lr: float = 1e-4,
     ):
         super().__init__()
         self.pe_freqs = pe_freqs
         self.n_train_queries = n_train_queries
+        self.eval_chunk_size = eval_chunk_size
+        self.grad_ascent_steps = grad_ascent_steps
+        self.grad_ascent_lr = grad_ascent_lr
 
         self.backbone = DepthAnythingV2Backbone(model_size, freeze=freeze_backbone)
 
@@ -214,6 +225,21 @@ class I2P_IPDF(nn.Module):
             h = self.mlp_img_proj(img_emb) + self.mlp_rot_proj(rot_pe)
         return self.mlp_body(h).squeeze(-1)
 
+    def _score_chunked(self, img_emb: torch.Tensor, rots: torch.Tensor) -> torch.Tensor:
+        """Score a large set of rotations in memory-safe chunks.
+
+        img_emb : [B, 512]
+        rots    : [N, 3, 3]
+        returns : [B, N]
+        """
+        chunks = []
+        for i in range(0, rots.shape[0], self.eval_chunk_size):
+            chunk = rots[i : i + self.eval_chunk_size]               # [C, 3, 3]
+            rot_pe = self._positional_encode(chunk)                  # [C, pe_dim]
+            rot_pe = rot_pe.unsqueeze(0).expand(img_emb.shape[0], -1, -1)
+            chunks.append(self._score(img_emb, rot_pe))
+        return torch.cat(chunks, dim=1)                              # [B, N]
+
     @staticmethod
     def _sample_random_so3(n: int, device) -> torch.Tensor:
         """Haar-uniform random rotations via QR decomposition."""
@@ -222,22 +248,60 @@ class I2P_IPDF(nn.Module):
         Q = Q * torch.det(Q).sign().view(n, 1, 1)
         return Q
 
-    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _matrix_to_quat(R: torch.Tensor) -> torch.Tensor:
+        batch = R.shape[0]
+        trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+        q = torch.zeros(batch, 4, device=R.device, dtype=R.dtype)
+        # Case: trace > 0
+        s = torch.sqrt((trace + 1).clamp(min=1e-10)) * 2          # 4w
+        q[:, 0] = 0.25 * s
+        q[:, 1] = (R[:, 2, 1] - R[:, 1, 2]) / s
+        q[:, 2] = (R[:, 0, 2] - R[:, 2, 0]) / s
+        q[:, 3] = (R[:, 1, 0] - R[:, 0, 1]) / s
+        return q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
+
+    @staticmethod
+    def _quat_to_matrix(q: torch.Tensor) -> torch.Tensor:
+        q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
+        w, x, y, z = q.unbind(-1)
+        R = torch.stack([
+            1 - 2*(y*y + z*z),   2*(x*y - w*z),   2*(x*z + w*y),
+            2*(x*y + w*z),   1 - 2*(x*x + z*z),   2*(y*z - w*x),
+            2*(x*z - w*y),       2*(y*z + w*x),   1 - 2*(x*x + y*y),
+        ], dim=-1).reshape(q.shape[0], 3, 3)
+        return R
+
+    def _gradient_ascent(
+        self, img_emb: torch.Tensor, R_init: torch.Tensor
+    ) -> torch.Tensor:
+        q = self._matrix_to_quat(R_init).detach().requires_grad_(True)
+
+        for _ in range(self.grad_ascent_steps):
+            R = self._quat_to_matrix(q)                             # [B, 3, 3]
+            rot_pe = self._positional_encode(R)                     # [B, pe_dim]
+            score = self._score(img_emb.detach(), rot_pe).sum()
+            score.backward()
+            with torch.no_grad():
+                q = q + self.grad_ascent_lr * q.grad
+                q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
+            q = q.detach().requires_grad_(True)
+
+        with torch.no_grad():
+            return self._quat_to_matrix(q)
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Returns logits on the SO(3) HEALPix grid: [B, N_grid]."""
         img_emb = self._encode_image(x)
-        rot_pe = self._positional_encode(self.so3_rotmats_cache)         # [N_grid, pe_dim]
-        rot_pe = rot_pe.unsqueeze(0).expand(img_emb.shape[0], -1, -1)   # [B, N_grid, pe_dim]
-        return self._score(img_emb, rot_pe)
+        return self._score_chunked(img_emb, self.so3_rotmats_cache)
 
     def compute_loss(
         self,
         img: torch.Tensor,
         rot_gt: torch.Tensor,
-        criterion,                  # ignored — NLL is computed here
+        criterion,                
     ) -> torch.Tensor:
-        """IPDF NLL loss over n_train_queries rotations (R_GT at index 0)."""
         b = img.shape[0]
         img_emb = self._encode_image(img)
 
@@ -253,8 +317,15 @@ class I2P_IPDF(nn.Module):
 
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> torch.Tensor:
-        logits = self.forward(x)
-        return self.so3_rotmats_cache[torch.argmax(logits, dim=-1)]
+        img_emb = self._encode_image(x)
+        logits = self._score_chunked(img_emb, self.so3_rotmats_cache)  # [B, N_grid]
+        best_idx = torch.argmax(logits, dim=-1)                         # [B]
+        R_init = self.so3_rotmats_cache[best_idx]                       # [B, 3, 3]
+
+        if self.grad_ascent_steps > 0:
+            R_init = self._gradient_ascent(img_emb, R_init)
+
+        return R_init
 
     @torch.no_grad()
     def get_nearest_idx(self, rot_gt: torch.Tensor) -> torch.Tensor:

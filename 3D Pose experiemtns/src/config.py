@@ -34,8 +34,9 @@ def create_argparser():
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)
-    parser.add_argument("--n_train_queries", type=int, default=2048)
-    parser.add_argument("--pool_hw", type=int, default=16)
+    parser.add_argument("--n_train_queries", type=int, default=4096)
+    parser.add_argument("--grad_ascent_steps", type=int, default=100)
+    parser.add_argument("--grad_ascent_lr", type=float, default=1e-4)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 

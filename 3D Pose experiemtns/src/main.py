@@ -65,6 +65,8 @@ def instantiate(config):
             rec_level=config.rec_level,
             n_train_queries=config.n_train_queries,
             pe_freqs=config.pe_freqs,
+            grad_ascent_steps=config.grad_ascent_steps,
+            grad_ascent_lr=config.grad_ascent_lr,
         )
     elif config.model == "dummynet":
         model = DummyNet()
