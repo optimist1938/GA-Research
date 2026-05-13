@@ -27,12 +27,6 @@ def _infer_hidden_size(config) -> Optional[int]:
 # --------------------------------------------------------------------------- #
 
 class DepthAnythingV2Backbone(nn.Module):
-    """DepthAnythingV2 multi-layer hidden-state extractor.
-
-    Returns concatenated patch-level features at native ViT patch resolution
-    (16×16 for 224×224 input with patch_size=14).  No interpolation, no CNN.
-    output shape: [B, hidden_size * len(layers), s, s]
-    """
 
     def __init__(
         self,
@@ -62,7 +56,6 @@ class DepthAnythingV2Backbone(nn.Module):
 
     @staticmethod
     def _to_feature_map(h: torch.Tensor) -> torch.Tensor:
-        """[B, N+1, C] → [B, C, s, s]  (removes CLS token, reshapes to square grid)."""
         patches = h[:, 1:]                                   # drop CLS
         b, n, c = patches.shape
         s = int(math.sqrt(n))
@@ -81,7 +74,6 @@ class DepthAnythingV2Backbone(nn.Module):
 # --------------------------------------------------------------------------- #
 
 class I2P(nn.Module):
-    """DepthAnythingV2 hidden-state backbone with token-MLP pose head."""
 
     def __init__(
         self,
@@ -125,7 +117,6 @@ class I2P(nn.Module):
 # --------------------------------------------------------------------------- #
 
 class I2P_IPDF(nn.Module):
- 
 
     def __init__(
         self,
@@ -160,14 +151,11 @@ class I2P_IPDF(nn.Module):
         )
 
         img_dim = 512
-        # raw 9 elements + sin/cos for each frequency
-        rot_pe_dim = 9 + 2 * pe_freqs * 9
+        rot_pe_dim = 9 + 2 * pe_freqs * 9   # raw 9 elements + sin/cos per frequency
 
-        # Efficient first layer: W_img * d + W_rot * q  (IPDF batching trick)
         self.mlp_img_proj = nn.Linear(img_dim, 256, bias=True)
         self.mlp_rot_proj = nn.Linear(rot_pe_dim, 256, bias=False)
 
-        # Remaining 3 layers → scalar  (4 total as in paper)
         self.mlp_body = nn.Sequential(
             nn.ReLU(),
             nn.Linear(256, 256),
@@ -183,7 +171,9 @@ class I2P_IPDF(nn.Module):
     # ------------------------------------------------------------------ #
 
     def _positional_encode(self, R: torch.Tensor) -> torch.Tensor:
-  
+        # Raw elements are necessary: sin(k*pi*(+1)) == sin(k*pi*(-1)) == 0
+        # for all integer-multiple-of-pi frequencies, so without raw r the
+        # network cannot distinguish r=+1 from r=-1.
         shape = R.shape[:-2]
         r = R.reshape(*shape, 9)
         freqs = (2 ** torch.arange(self.pe_freqs, device=R.device, dtype=R.dtype)) * math.pi
@@ -193,13 +183,12 @@ class I2P_IPDF(nn.Module):
         return torch.cat([r, pe], dim=-1)                    # [..., 9 + 2*pe_freqs*9]
 
     def _encode_image(self, x: torch.Tensor) -> torch.Tensor:
-         feat = self.backbone(x)                              # [B, C, s, s]
+        feat = self.backbone(x)                              # [B, C, s, s]
         b, c, h, w = feat.shape
         tokens = feat.permute(0, 2, 3, 1).reshape(b, h * w, c)  # [B, s*s, C]
         return self.token_mlp(tokens).mean(dim=1)            # [B, 512]
 
     def _score(self, img_emb: torch.Tensor, rot_pe: torch.Tensor) -> torch.Tensor:
-  
         if rot_pe.dim() == 3:
             h = self.mlp_img_proj(img_emb).unsqueeze(1) + self.mlp_rot_proj(rot_pe)
         else:
@@ -207,33 +196,31 @@ class I2P_IPDF(nn.Module):
         return self.mlp_body(h).squeeze(-1)
 
     def _score_chunked(self, img_emb: torch.Tensor, rots: torch.Tensor) -> torch.Tensor:
- 
         chunks = []
         for i in range(0, rots.shape[0], self.eval_chunk_size):
-            chunk = rots[i : i + self.eval_chunk_size]               # [C, 3, 3]
-            rot_pe = self._positional_encode(chunk)                  # [C, pe_dim]
+            chunk = rots[i : i + self.eval_chunk_size]
+            rot_pe = self._positional_encode(chunk)
             rot_pe = rot_pe.unsqueeze(0).expand(img_emb.shape[0], -1, -1)
             chunks.append(self._score(img_emb, rot_pe))
-        return torch.cat(chunks, dim=1)                              # [B, N]
+        return torch.cat(chunks, dim=1)                      # [B, N]
 
     @staticmethod
     def _sample_random_so3(n: int, device) -> torch.Tensor:
-         M = torch.randn(n, 3, 3, device=device)
-        Q, _ = torch.linalg.qr(M)
-        # Sign-correct each column via diagonal of R → Haar-uniform on O(3)
-        d = torch.diagonal(R, dim1=-2, dim2=-1).sign()        # [n, 3]
-        Q = Q * d.unsqueeze(-2)                               # [n, 3, 3]
-        # Project O(3) → SO(3): flip last column where det = -1
+        M = torch.randn(n, 3, 3, device=device)
+        Q, R = torch.linalg.qr(M)
+        # Sign-correct columns via diag(R) to get Haar-uniform O(3)
+        d = torch.diagonal(R, dim1=-2, dim2=-1).sign()       # [n, 3]
+        Q = Q * d.unsqueeze(-2)                              # [n, 3, 3]
+        # Flip last column where det=-1 to project to SO(3)
         dets = torch.det(Q)
         flip = torch.ones(n, 3, device=device)
         flip[:, 2] = dets.sign()
         return Q * flip.unsqueeze(-2)
 
-
     @staticmethod
     def _matrix_to_quat(R: torch.Tensor) -> torch.Tensor:
         trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
-        s = torch.sqrt((trace + 1).clamp(min=1e-10)) * 2   # = 4w
+        s = torch.sqrt((trace + 1).clamp(min=1e-10)) * 2    # = 4w
         q = torch.stack([
             0.25 * s,
             (R[:, 2, 1] - R[:, 1, 2]) / s,
@@ -256,7 +243,7 @@ class I2P_IPDF(nn.Module):
     def _gradient_ascent(
         self, img_emb: torch.Tensor, R_init: torch.Tensor
     ) -> torch.Tensor:
-        # predict() runs under @torch.no_grad(), so we must re-enable autograd here.
+        # predict() runs under @torch.no_grad() - re-enable autograd only for q.
         q = self._matrix_to_quat(R_init).detach()
 
         for _ in range(self.grad_ascent_steps):
@@ -265,14 +252,15 @@ class I2P_IPDF(nn.Module):
                 R = self._quat_to_matrix(q)
                 rot_pe = self._positional_encode(R)
                 score = self._score(img_emb, rot_pe).sum()
-                # autograd.grad computes gradient only for q,
-                # does NOT accumulate gradients into MLP parameters.
+                # autograd.grad returns grad for q only, does NOT
+                # accumulate into MLP parameter .grad attributes.
                 (grad_q,) = torch.autograd.grad(score, q)
             q = (q + self.grad_ascent_lr * grad_q).detach()
             q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
 
         return self._quat_to_matrix(q)
 
+    # ------------------------------------------------------------------ #
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         img_emb = self._encode_image(x)
@@ -282,17 +270,17 @@ class I2P_IPDF(nn.Module):
         self,
         img: torch.Tensor,
         rot_gt: torch.Tensor,
-        criterion,                
+        criterion,
     ) -> torch.Tensor:
         b = img.shape[0]
         img_emb = self._encode_image(img)
 
         sampled = self._sample_random_so3(self.n_train_queries - 1, img.device)
-        sampled = sampled.unsqueeze(0).expand(b, -1, -1, -1)            # [B, N-1, 3, 3]
-        queries = torch.cat([rot_gt.unsqueeze(1), sampled], dim=1)      # [B, N, 3, 3]
+        sampled = sampled.unsqueeze(0).expand(b, -1, -1, -1)
+        queries = torch.cat([rot_gt.unsqueeze(1), sampled], dim=1)  # [B, N, 3, 3]
 
-        rot_pe = self._positional_encode(queries)                        # [B, N, pe_dim]
-        logits = self._score(img_emb, rot_pe)                           # [B, N]
+        rot_pe = self._positional_encode(queries)                    # [B, N, pe_dim]
+        logits = self._score(img_emb, rot_pe)                        # [B, N]
 
         nll = -(logits[:, 0] - torch.logsumexp(logits, dim=1))
         return nll.mean()
@@ -300,9 +288,9 @@ class I2P_IPDF(nn.Module):
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         img_emb = self._encode_image(x)
-        logits = self._score_chunked(img_emb, self.so3_rotmats_cache)  # [B, N_grid]
-        best_idx = torch.argmax(logits, dim=-1)                         # [B]
-        R_init = self.so3_rotmats_cache[best_idx]                       # [B, 3, 3]
+        logits = self._score_chunked(img_emb, self.so3_rotmats_cache)
+        best_idx = torch.argmax(logits, dim=-1)
+        R_init = self.so3_rotmats_cache[best_idx]
 
         if self.grad_ascent_steps > 0:
             R_init = self._gradient_ascent(img_emb, R_init)
