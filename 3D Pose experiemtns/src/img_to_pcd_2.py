@@ -251,15 +251,14 @@ class I2P_IPDF(nn.Module):
 
     @staticmethod
     def _matrix_to_quat(R: torch.Tensor) -> torch.Tensor:
-        batch = R.shape[0]
         trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
-        q = torch.zeros(batch, 4, device=R.device, dtype=R.dtype)
-        # Case: trace > 0
-        s = torch.sqrt((trace + 1).clamp(min=1e-10)) * 2          # 4w
-        q[:, 0] = 0.25 * s
-        q[:, 1] = (R[:, 2, 1] - R[:, 1, 2]) / s
-        q[:, 2] = (R[:, 0, 2] - R[:, 2, 0]) / s
-        q[:, 3] = (R[:, 1, 0] - R[:, 0, 1]) / s
+        s = torch.sqrt((trace + 1).clamp(min=1e-10)) * 2   # = 4w
+        q = torch.stack([
+            0.25 * s,
+            (R[:, 2, 1] - R[:, 1, 2]) / s,
+            (R[:, 0, 2] - R[:, 2, 0]) / s,
+            (R[:, 1, 0] - R[:, 0, 1]) / s,
+        ], dim=-1)
         return q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
 
     @staticmethod
@@ -276,20 +275,20 @@ class I2P_IPDF(nn.Module):
     def _gradient_ascent(
         self, img_emb: torch.Tensor, R_init: torch.Tensor
     ) -> torch.Tensor:
-        q = self._matrix_to_quat(R_init).detach().requires_grad_(True)
+        # predict() runs under @torch.no_grad(), so we must re-enable autograd here.
+        q = self._matrix_to_quat(R_init).detach()
 
         for _ in range(self.grad_ascent_steps):
-            R = self._quat_to_matrix(q)                             # [B, 3, 3]
-            rot_pe = self._positional_encode(R)                     # [B, pe_dim]
-            score = self._score(img_emb.detach(), rot_pe).sum()
-            score.backward()
-            with torch.no_grad():
-                q = q + self.grad_ascent_lr * q.grad
-                q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
             q = q.detach().requires_grad_(True)
+            with torch.enable_grad():
+                R = self._quat_to_matrix(q)
+                rot_pe = self._positional_encode(R)
+                score = self._score(img_emb, rot_pe).sum()
+                score.backward()
+            q = (q + self.grad_ascent_lr * q.grad).detach()
+            q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
 
-        with torch.no_grad():
-            return self._quat_to_matrix(q)
+        return self._quat_to_matrix(q)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
