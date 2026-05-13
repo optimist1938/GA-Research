@@ -125,23 +125,7 @@ class I2P(nn.Module):
 # --------------------------------------------------------------------------- #
 
 class I2P_IPDF(nn.Module):
-    """
-    DepthAnythingV2 hidden-state backbone + token-MLP encoder + IPDF scoring MLP.
-
-    Architecture:
-      image  -> backbone -> token_mlp -> mean-pool -> img_emb  (512-d)
-      R (3x3) -> flatten (9-d) -> positional encoding          (2*pe_freqs*9-d)
-      first layer: W_img * img_emb  +  W_rot * rot_PE          (IPDF batching trick)
-      -> 3 more hidden layers (256) + ReLU -> scalar logit
-
-    Training loss: NLL  -log p(R_GT | x) via softmax over n_train_queries rotations.
-    Inference:     chunked argmax over HEALPix SO(3) grid + gradient ascent refinement.
-
-    Grid sizes (72 * 8^rec_level):
-        rec_level=2 ->   4,608 pts  (used for training queries in original paper)
-        rec_level=3 ->  36,864 pts  (recommended eval grid)
-        rec_level=4 -> 294,912 pts  (high-quality eval, slower)
-    """
+ 
 
     def __init__(
         self,
@@ -176,7 +160,8 @@ class I2P_IPDF(nn.Module):
         )
 
         img_dim = 512
-        rot_pe_dim = 2 * pe_freqs * 9
+        # raw 9 elements + sin/cos for each frequency
+        rot_pe_dim = 9 + 2 * pe_freqs * 9
 
         # Efficient first layer: W_img * d + W_rot * q  (IPDF batching trick)
         self.mlp_img_proj = nn.Linear(img_dim, 256, bias=True)
@@ -198,27 +183,23 @@ class I2P_IPDF(nn.Module):
     # ------------------------------------------------------------------ #
 
     def _positional_encode(self, R: torch.Tensor) -> torch.Tensor:
-        """[..., 3, 3] → [..., 2 * pe_freqs * 9]"""
+  
         shape = R.shape[:-2]
         r = R.reshape(*shape, 9)
         freqs = (2 ** torch.arange(self.pe_freqs, device=R.device, dtype=R.dtype)) * math.pi
         x = r.unsqueeze(-1) * freqs                          # [..., 9, pe_freqs]
         pe = torch.cat([x.sin(), x.cos()], dim=-1)           # [..., 9, 2*pe_freqs]
-        return pe.reshape(*shape, 9 * 2 * self.pe_freqs)
+        pe = pe.reshape(*shape, 9 * 2 * self.pe_freqs)
+        return torch.cat([r, pe], dim=-1)                    # [..., 9 + 2*pe_freqs*9]
 
     def _encode_image(self, x: torch.Tensor) -> torch.Tensor:
-        """backbone + token_mlp → global image embedding  [B, 512]."""
-        feat = self.backbone(x)                              # [B, C, s, s]
+         feat = self.backbone(x)                              # [B, C, s, s]
         b, c, h, w = feat.shape
         tokens = feat.permute(0, 2, 3, 1).reshape(b, h * w, c)  # [B, s*s, C]
         return self.token_mlp(tokens).mean(dim=1)            # [B, 512]
 
     def _score(self, img_emb: torch.Tensor, rot_pe: torch.Tensor) -> torch.Tensor:
-        """
-        img_emb : [B, 512]
-        rot_pe  : [B, N, rot_pe_dim]  or  [N, rot_pe_dim]
-        returns : [B, N]              or  [B]
-        """
+  
         if rot_pe.dim() == 3:
             h = self.mlp_img_proj(img_emb).unsqueeze(1) + self.mlp_rot_proj(rot_pe)
         else:
@@ -226,12 +207,7 @@ class I2P_IPDF(nn.Module):
         return self.mlp_body(h).squeeze(-1)
 
     def _score_chunked(self, img_emb: torch.Tensor, rots: torch.Tensor) -> torch.Tensor:
-        """Score a large set of rotations in memory-safe chunks.
-
-        img_emb : [B, 512]
-        rots    : [N, 3, 3]
-        returns : [B, N]
-        """
+ 
         chunks = []
         for i in range(0, rots.shape[0], self.eval_chunk_size):
             chunk = rots[i : i + self.eval_chunk_size]               # [C, 3, 3]
@@ -242,11 +218,16 @@ class I2P_IPDF(nn.Module):
 
     @staticmethod
     def _sample_random_so3(n: int, device) -> torch.Tensor:
-        """Haar-uniform random rotations via QR decomposition."""
-        M = torch.randn(n, 3, 3, device=device)
+         M = torch.randn(n, 3, 3, device=device)
         Q, _ = torch.linalg.qr(M)
-        Q = Q * torch.det(Q).sign().view(n, 1, 1)
-        return Q
+        # Sign-correct each column via diagonal of R → Haar-uniform on O(3)
+        d = torch.diagonal(R, dim1=-2, dim2=-1).sign()        # [n, 3]
+        Q = Q * d.unsqueeze(-2)                               # [n, 3, 3]
+        # Project O(3) → SO(3): flip last column where det = -1
+        dets = torch.det(Q)
+        flip = torch.ones(n, 3, device=device)
+        flip[:, 2] = dets.sign()
+        return Q * flip.unsqueeze(-2)
 
 
     @staticmethod
