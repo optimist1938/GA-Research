@@ -284,8 +284,10 @@ class I2P_IPDF(nn.Module):
                 R = self._quat_to_matrix(q)
                 rot_pe = self._positional_encode(R)
                 score = self._score(img_emb, rot_pe).sum()
-                score.backward()
-            q = (q + self.grad_ascent_lr * q.grad).detach()
+                # autograd.grad computes gradient only for q,
+                # does NOT accumulate gradients into MLP parameters.
+                (grad_q,) = torch.autograd.grad(score, q)
+            q = (q + self.grad_ascent_lr * grad_q).detach()
             q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-10)
 
         return self._quat_to_matrix(q)
