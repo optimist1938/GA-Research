@@ -824,6 +824,20 @@ class DepthAnythingV2HiddenStatesBackbone(nn.Module):
         return torch.cat(feature_maps, dim=1)
 
 
+class AttentionPool(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.GELU(),
+            nn.Linear(dim // 2, 1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weights = torch.softmax(self.score(x), dim=1)
+        return (x * weights).sum(dim=1)
+
+
 class ViTMultiLayerPoseBaseline(nn.Module):
     def __init__(
         self,
@@ -831,6 +845,11 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         backbone_type: str = "vit",
         layers: tuple = (-1, -3, -6, -9),
         freeze_vit: bool = True,
+        pooling_type: str = "mean",
+        num_transformer_layers: int = 1,
+        transformer_nhead: int = 8,
+        transformer_ff_dim: int = 1024,
+        transformer_dropout: float = 0.1,
     ):
         super().__init__()
 
@@ -838,6 +857,31 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         self.backbone_type = backbone_type
         self.layers = tuple(layers)
         self.freeze_vit = bool(freeze_vit)
+        self.pooling_type = str(pooling_type).lower()
+
+        valid_pooling_types = {"mean", "attention", "transformer_attention"}
+        if self.pooling_type not in valid_pooling_types:
+            raise ValueError(
+                "pooling_type must be one of "
+                f"{sorted(valid_pooling_types)}, got {pooling_type!r}"
+            )
+
+        if self.pooling_type == "transformer_attention":
+            if num_transformer_layers < 1:
+                raise ValueError(
+                    "num_transformer_layers must be >= 1 for "
+                    "transformer_attention pooling"
+                )
+            if transformer_nhead <= 0:
+                raise ValueError("transformer_nhead must be > 0")
+            if transformer_ff_dim <= 0:
+                raise ValueError("transformer_ff_dim must be > 0")
+            if 512 % transformer_nhead != 0:
+                raise ValueError(
+                    "transformer_nhead must divide the token embedding dimension 512"
+                )
+            if not 0 <= transformer_dropout < 1:
+                raise ValueError("transformer_dropout must satisfy 0 <= dropout < 1")
 
         if len(self.layers) == 0:
             raise ValueError("layers must contain at least one hidden-state index")
@@ -874,6 +918,29 @@ class ViTMultiLayerPoseBaseline(nn.Module):
             nn.Linear(1024, 512),
             nn.GELU(),
         )
+
+        if self.pooling_type == "mean":
+            self.patch_transformer = nn.Identity()
+            self.pool = None
+        elif self.pooling_type == "attention":
+            self.patch_transformer = nn.Identity()
+            self.pool = AttentionPool(512)
+        elif self.pooling_type == "transformer_attention":
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=512,
+                nhead=transformer_nhead,
+                dim_feedforward=transformer_ff_dim,
+                dropout=transformer_dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.patch_transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=num_transformer_layers,
+            )
+            self.pool = AttentionPool(512)
+
         self.pose_head = nn.Sequential(
             nn.Linear(512, 256),
             nn.GELU(),
@@ -887,8 +954,19 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         feature_map = self.backbone(x)
         flattened_spatial = feature_map.flatten(2)
         patch_features = flattened_spatial.transpose(1, 2)
+
         patch_embeddings = self.token_mlp(patch_features)
-        global_embedding = patch_embeddings.mean(dim=1)
+
+        if self.pooling_type == "mean":
+            global_embedding = patch_embeddings.mean(dim=1)
+        elif self.pooling_type == "attention":
+            global_embedding = self.pool(patch_embeddings)
+        elif self.pooling_type == "transformer_attention":
+            patch_embeddings = self.patch_transformer(patch_embeddings)
+            global_embedding = self.pool(patch_embeddings)
+        else:
+            raise RuntimeError("Unexpected pooling_type")
+
         out = self.pose_head(global_embedding)
         return out.view(-1, 3, 3)
 

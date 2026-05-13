@@ -86,6 +86,11 @@ def instantiate(config):
             backbone_type=config.vit_backbone_type,
             layers=tuple(config.vit_layers),
             freeze_vit=config.freeze_vit,
+            pooling_type=getattr(config, "vit_pooling_type", "mean"),
+            num_transformer_layers=getattr(config, "vit_num_transformer_layers", 1),
+            transformer_nhead=getattr(config, "vit_transformer_nhead", 8),
+            transformer_ff_dim=getattr(config, "vit_transformer_ff_dim", 1024),
+            transformer_dropout=getattr(config, "vit_transformer_dropout", 0.1),
         )
     elif config.model == "i2s":
         model = I2S(
