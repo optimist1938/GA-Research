@@ -37,7 +37,7 @@ def create_argparser():
         "--vit_pooling_type",
         type=str,
         default="mean",
-        choices=["mean", "attention", "transformer_attention"],
+        choices=["mean", "attention", "transformer_attention", "convolution"],
     )
     parser.add_argument("--vit_num_transformer_layers", type=int, default=1)
     parser.add_argument("--vit_transformer_nhead", type=int, default=8)
