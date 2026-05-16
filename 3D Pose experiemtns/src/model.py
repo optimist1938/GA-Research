@@ -859,7 +859,12 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         self.freeze_vit = bool(freeze_vit)
         self.pooling_type = str(pooling_type).lower()
 
-        valid_pooling_types = {"mean", "attention", "transformer_attention"}
+        valid_pooling_types = {
+            "mean",
+            "attention",
+            "transformer_attention",
+            "convolution",
+        }
         if self.pooling_type not in valid_pooling_types:
             raise ValueError(
                 "pooling_type must be one of "
@@ -940,15 +945,30 @@ class ViTMultiLayerPoseBaseline(nn.Module):
                 num_layers=num_transformer_layers,
             )
             self.pool = AttentionPool(512)
+        elif self.pooling_type == "convolution":
+            self.patch_transformer = nn.Identity()
+            self.pool = None
+            self.conv_pose_head = nn.Sequential(
+                nn.Conv2d(512, 256, kernel_size=3, padding=1),
+                nn.GroupNorm(8, 256),
+                nn.GELU(),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(256, 128, kernel_size=3, padding=1),
+                nn.GroupNorm(8, 128),
+                nn.GELU(),
+                nn.AdaptiveAvgPool2d((3, 3)),
+                nn.Conv2d(128, 1, kernel_size=1),
+            )
 
-        self.pose_head = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 256),
-            nn.GELU(),
-            nn.Linear(256, 9),
-        )
+        if self.pooling_type != "convolution":
+            self.pose_head = nn.Sequential(
+                nn.Linear(512, 256),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, 256),
+                nn.GELU(),
+                nn.Linear(256, 9),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         feature_map = self.backbone(x)
@@ -956,6 +976,23 @@ class ViTMultiLayerPoseBaseline(nn.Module):
         patch_features = flattened_spatial.transpose(1, 2)
 
         patch_embeddings = self.token_mlp(patch_features)
+
+        if self.pooling_type == "convolution":
+            batch_size, num_patches, embedding_dim = patch_embeddings.shape
+            spatial_size = int(num_patches ** 0.5)
+            if spatial_size * spatial_size != num_patches:
+                raise RuntimeError(
+                    "convolution pooling requires a square number of patch tokens, "
+                    f"got {num_patches} tokens"
+                )
+            patch_grid = patch_embeddings.transpose(1, 2).reshape(
+                batch_size,
+                embedding_dim,
+                spatial_size,
+                spatial_size,
+            )
+            out = self.conv_pose_head(patch_grid)
+            return out.squeeze(1)
 
         if self.pooling_type == "mean":
             global_embedding = patch_embeddings.mean(dim=1)
