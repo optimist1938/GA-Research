@@ -37,6 +37,8 @@ def create_argparser():
     parser.add_argument("--n_train_queries", type=int, default=4096)
     parser.add_argument("--grad_ascent_steps", type=int, default=100)
     parser.add_argument("--grad_ascent_lr", type=float, default=1e-4)
+    parser.add_argument("--freeze_backbone", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pretrained_backbone", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 

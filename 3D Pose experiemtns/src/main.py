@@ -67,6 +67,8 @@ def instantiate(config):
             pe_freqs=config.pe_freqs,
             grad_ascent_steps=config.grad_ascent_steps,
             grad_ascent_lr=config.grad_ascent_lr,
+            freeze_backbone=config.freeze_backbone,
+            pretrained_backbone=config.pretrained_backbone,
         )
     elif config.model == "dummynet":
         model = DummyNet()

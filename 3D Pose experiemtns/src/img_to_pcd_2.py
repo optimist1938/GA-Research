@@ -33,15 +33,22 @@ class DepthAnythingV2Backbone(nn.Module):
         model_size: str = "base",
         layers: tuple = (-1, -3, -6, -9),
         freeze: bool = True,
+        pretrained: bool = True,
     ):
         super().__init__()
-        from transformers import AutoModelForDepthEstimation
+        from transformers import AutoModelForDepthEstimation, AutoConfig
 
         self.layers = tuple(layers)
         model_name = f"depth-anything/Depth-Anything-V2-{model_size.capitalize()}-hf"
-        self.model = AutoModelForDepthEstimation.from_pretrained(
-            model_name, output_hidden_states=True
-        )
+
+        if pretrained:
+            self.model = AutoModelForDepthEstimation.from_pretrained(
+                model_name, output_hidden_states=True
+            )
+        else:
+            cfg = AutoConfig.from_pretrained(model_name)
+            self.model = AutoModelForDepthEstimation.from_config(cfg)
+
         self.model.config.output_hidden_states = True
 
         if freeze:
@@ -122,6 +129,7 @@ class I2P_IPDF(nn.Module):
         self,
         model_size: str = "base",
         freeze_backbone: bool = True,
+        pretrained_backbone: bool = True,
         rec_level: int = 3,
         n_train_queries: int = 4096,
         pe_freqs: int = 4,
@@ -136,7 +144,9 @@ class I2P_IPDF(nn.Module):
         self.grad_ascent_steps = grad_ascent_steps
         self.grad_ascent_lr = grad_ascent_lr
 
-        self.backbone = DepthAnythingV2Backbone(model_size, freeze=freeze_backbone)
+        self.backbone = DepthAnythingV2Backbone(
+            model_size, freeze=freeze_backbone, pretrained=pretrained_backbone
+        )
 
         in_dim = self.backbone.output_dim
         first_token_layer = (
