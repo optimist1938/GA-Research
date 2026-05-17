@@ -838,13 +838,33 @@ class AttentionPool(nn.Module):
         return (x * weights).sum(dim=1)
 
 
+def _normalize_optional_hidden_dims(hidden_dim):
+    if hidden_dim is None:
+        return []
+
+    if isinstance(hidden_dim, int):
+        if hidden_dim == -1:
+            return []
+        return [hidden_dim]
+
+    hidden_dims = list(hidden_dim)
+
+    if len(hidden_dims) == 0:
+        return []
+
+    if len(hidden_dims) == 1 and int(hidden_dims[0]) == -1:
+        return []
+
+    return [int(hd) for hd in hidden_dims]
+
+
 class SimpleFullGeometricProductPoseHead(nn.Module):
     def __init__(
         self,
         algebra,
         input_dim: int = 512,
         input_features: int = 196,
-        hidden_dim: list[int] | int = [32],
+        hidden_dim: list[int] | int | None = [32],
         out_features: int = 9,
         readout_type: str = "linear",
     ):
@@ -866,6 +886,7 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             raise ValueError("input_features must be positive")
         if self.out_features != 9:
             raise ValueError("out_features must be 9 to form a 3x3 pose matrix")
+
         valid_readout_types = {"scalar", "mean", "linear", "grade"}
         if self.readout_type not in valid_readout_types:
             raise ValueError(
@@ -873,15 +894,13 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
                 f"{sorted(valid_readout_types)}, got {readout_type!r}"
             )
 
-        if isinstance(hidden_dim, int):
-            hidden_dims = [hidden_dim]
-        else:
-            hidden_dims = list(hidden_dim)
-        if len(hidden_dims) == 0:
-            raise ValueError("hidden_dim must be a non-empty int or list[int]")
-        hidden_dims = [int(hd) for hd in hidden_dims]
+        hidden_dims = _normalize_optional_hidden_dims(hidden_dim)
+
         if any(hd <= 0 for hd in hidden_dims):
-            raise ValueError("all hidden_dim values must be positive")
+            raise ValueError(
+                "all hidden_dim values must be positive, "
+                "or use -1/None/[] to disable hidden layers"
+            )
 
         self.to_mv = nn.Sequential(
             nn.LayerNorm(self.input_dim),
@@ -890,6 +909,7 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
 
         self.blocks = nn.ModuleList()
         prev_features = self.input_features
+
         for hd in hidden_dims:
             self.blocks.append(
                 nn.ModuleDict({
@@ -922,7 +942,6 @@ class SimpleFullGeometricProductPoseHead(nn.Module):
             self.mv_to_scalar = nn.Linear(algebra.dim + 1, 1)
         else:
             self.mv_to_scalar = None
-
     def forward(self, patch_embeddings: torch.Tensor) -> torch.Tensor:
         if getattr(self, "_extra_tensors_device", None) != patch_embeddings.device:
             _move_unregistered_tensors_to_device(self, patch_embeddings.device)
