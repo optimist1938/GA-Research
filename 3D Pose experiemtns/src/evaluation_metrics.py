@@ -7,6 +7,44 @@ from tqdm import tqdm
 import numpy as np
 
 
+def unit_quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
+    if q.ndim != 2 or q.shape[-1] != 4:
+        raise ValueError(f"Expected unit quaternion shape [B, 4], got {tuple(q.shape)}")
+    q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    w, x, y, z = q.unbind(dim=-1)
+
+    ww = w * w
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+
+    return torch.stack(
+        [
+            torch.stack((ww + xx - yy - zz, 2 * (xy - wz), 2 * (xz + wy)), dim=-1),
+            torch.stack((2 * (xy + wz), ww - xx + yy - zz, 2 * (yz - wx)), dim=-1),
+            torch.stack((2 * (xz - wy), 2 * (yz + wx), ww - xx - yy + zz), dim=-1),
+        ],
+        dim=-2,
+    )
+
+
+def project_multivector_to_rotor(mv: torch.Tensor) -> torch.Tensor:
+    if mv.shape[-1] != 8:
+        raise ValueError(
+            "project_multivector_to_rotor currently supports only Cl(3,0), "
+            f"expected mv_dim=8, got {mv.shape[-1]}"
+        )
+    rotor = mv[:, [0, 4, 5, 6]]
+    rotor = rotor / rotor.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    return rotor
+
+
 def create_technical_matrices(config):
     global I
     I = torch.eye(3)
@@ -67,11 +105,19 @@ def calculate_evaluation_metrics(model, loader, config):
         if "cls" in batch:
             clas = batch["cls"].to(device)
         
-        if hasattr(model, "predict") and callable(getattr(model, "predict")):
-            if clas is not None and _supports_class_argument(model.predict):
-                pred_rotmat = model.predict(img, clas)
-            else:
-                pred_rotmat = model.predict(img)
+        if clas is not None and _supports_class_argument(unwrapped_model.forward):
+            outputs = model(img, clas)
+        else:
+            outputs = model(img)
+
+        if config.loss == "prob" and hasattr(unwrapped_model, "so3_rotmats_cache"):
+            idx = torch.argmax(outputs, dim=-1)
+            pred_rotmat = unwrapped_model.so3_rotmats_cache[idx]
+        elif config.loss == "rotor":
+            pred_rotmat = unit_quaternion_to_matrix(outputs)
+        elif config.loss == "mv_rotor":
+            rotor = project_multivector_to_rotor(outputs)
+            pred_rotmat = unit_quaternion_to_matrix(rotor)
         else:
             pred_rotmat = model(img)
 
