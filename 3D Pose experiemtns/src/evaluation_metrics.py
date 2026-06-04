@@ -91,10 +91,6 @@ def _supports_class_argument(method) -> bool:
     return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
 
 
-def unwrap_model(model):
-    return model.module if isinstance(model, torch.nn.DataParallel) else model
-
-
 @torch.no_grad()
 def calculate_evaluation_metrics(model, loader, config):
     device = config.device
@@ -102,7 +98,6 @@ def calculate_evaluation_metrics(model, loader, config):
 
     model.eval()
     model.to(device)
-    unwrapped_model = unwrap_model(model)
     for batch in tqdm(loader, desc="Evaluating Model"):
         img = batch["img"].to(device)
 
@@ -124,7 +119,7 @@ def calculate_evaluation_metrics(model, loader, config):
             rotor = project_multivector_to_rotor(outputs)
             pred_rotmat = unit_quaternion_to_matrix(rotor)
         else:
-            pred_rotmat = outputs
+            pred_rotmat = model(img)
 
         gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))

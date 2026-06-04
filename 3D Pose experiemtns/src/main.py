@@ -87,6 +87,7 @@ def instantiate(config):
             algebra,
             encoder_type=config.encoder,
             ga_pool_hw=tuple(config.ga_pool_hw),
+            hidden_dim=config.hidden_dim
         )
     elif config.model == "mlp":
         model = MLPBaseline(encoder_type=config.encoder)
@@ -165,7 +166,6 @@ def instantiate(config):
     config.device = get_available_device()
     
     model.to(config.device)
-    model = maybe_wrap_model_for_multi_gpu(model, config)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     warmup_epochs = 5

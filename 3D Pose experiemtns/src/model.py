@@ -10,7 +10,7 @@ from clifford.models.modules.linear import MVLinear
 from image_encoders import build_encoder
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
-from typing import List, Union
+from typing import List,Union
 
 
 def _unit_quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
@@ -78,54 +78,6 @@ def _mv_to_rotation_matrix(mv: torch.Tensor) -> torch.Tensor:
 
 def _so3_num_fourier_coeffs(lmax: int) -> int:
     return sum([(2 * l + 1) ** 2 for l in range(lmax + 1)])
-
-
-def _move_tensors_in_object(obj, device: torch.device, visited: set):
-    obj_id = id(obj)
-    if obj_id in visited:
-        return obj
-    visited.add(obj_id)
-
-    if isinstance(obj, torch.Tensor):
-        return obj if obj.device == device else obj.to(device)
-
-    if isinstance(obj, dict):
-        for key, value in list(obj.items()):
-            obj[key] = _move_tensors_in_object(value, device, visited)
-        return obj
-
-    if isinstance(obj, list):
-        for idx, value in enumerate(obj):
-            obj[idx] = _move_tensors_in_object(value, device, visited)
-        return obj
-
-    if isinstance(obj, tuple):
-        return tuple(_move_tensors_in_object(value, device, visited) for value in obj)
-
-    if hasattr(obj, "__dict__"):
-        for attr_name, attr_value in list(vars(obj).items()):
-            moved_value = _move_tensors_in_object(attr_value, device, visited)
-            if moved_value is not attr_value:
-                setattr(obj, attr_name, moved_value)
-        return obj
-
-    return obj
-
-
-def _move_unregistered_tensors_to_device(module: nn.Module, device: torch.device):
-    visited = set()
-    for submodule in module.modules():
-        registered_params = set(dict(submodule.named_parameters(recurse=False)).keys())
-        registered_buffers = set(dict(submodule.named_buffers(recurse=False)).keys())
-
-        for attr_name, attr_value in list(submodule.__dict__.items()):
-            if attr_name in registered_params or attr_name in registered_buffers:
-                continue
-            moved_value = _move_tensors_in_object(attr_value, device, visited)
-            if moved_value is not attr_value:
-                setattr(submodule, attr_name, moved_value)
-
-
 
 class I2S(nn.Module):
     def __init__(
@@ -331,29 +283,29 @@ class TralaleroTralala(nn.Module):
         for hd in hidden_dims:
             self.blocks.append(
                 nn.ModuleDict({
-                    "fc": FullyConnectedSteerableGeometricProductLayer(
+                    "fc": MVLinear(
                         algebra, in_features=prev, out_features=hd
                     ),
                     "act1": MVSiLU(algebra, hd),
                     "gp": SteerableGeometricProductLayer(algebra, hd),
+                    "ln": MVLayerNorm(algebra, hd),
                     "act2": MVSiLU(algebra, hd),
                 })
             )
             prev = hd
 
-        self.out = FullyConnectedSteerableGeometricProductLayer(
+        self.out = MVLinear(
             algebra, in_features=prev, out_features=out_features
         )
 
-    def forward(self, x):
-        if getattr(self, "_extra_tensors_device", None) != x.device:
-            _move_unregistered_tensors_to_device(self, x.device)
-            self._extra_tensors_device = x.device
+        print(self)
 
+    def forward(self, x):
         for b in self.blocks:
             x = b["fc"](x)
             x = b["act1"](x)
             x = b["gp"](x)
+            x = b["ln"](x)
             x = b["act2"](x)
         x = self.out(x)
         return x
@@ -590,7 +542,7 @@ class ReducedGeometricProductHead(nn.Module):
 
 
 class TralaleroCompetitor(nn.Module):
-    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
+    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28), hidden_dim = [32]):
         super().__init__()
         self.algebra = algebra
         self._use_ga_backbone = encoder_type in {"ga", "ga_canonical"}
@@ -613,7 +565,7 @@ class TralaleroCompetitor(nn.Module):
             enc_channels = getattr(self.backbone, "output_shape", None)[0]
             self.projective_matrix = nn.Linear(enc_channels, self._n_mv * self._mv_dim)
 
-        self.ga_head = TralaleroTralala(algebra, in_features=self._n_mv)
+        self.ga_head = TralaleroTralala(algebra, in_features=self._n_mv, hidden_dim=hidden_dim)
 
     def _ga_to_canonical_mv(self, mv_grid: torch.Tensor) -> torch.Tensor:
         if mv_grid.shape[1] == self._mv_dim:
