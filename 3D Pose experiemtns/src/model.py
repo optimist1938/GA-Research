@@ -314,7 +314,8 @@ class CliffordFlow(nn.Module):
         return (pred - target).pow(2).sum(-1).mean()
 
     @torch.no_grad()
-    def predict(self, x, steps=20):
+    def predict(self, x):
+        steps = 20
         cond_mv = self.condition(x)
         rotor = random_rotor(x.shape[0]).to(x.device)
 
