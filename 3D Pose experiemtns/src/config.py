@@ -5,6 +5,7 @@ from dataclasses import dataclass
 def create_argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_epochs", type=int, default=10)
+    parser.add_argument("--warmup_epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--dataset", type=str, required=False, default="pascal")
     parser.add_argument("--path_to_datasets", type=str, required=True)

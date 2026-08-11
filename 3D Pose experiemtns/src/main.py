@@ -82,27 +82,29 @@ def instantiate(config):
     model.to(config.device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
-    warmup_epochs = 5
+    warmup_epochs = config.warmup_epochs
     cosine_epochs = config.n_epochs - warmup_epochs
-
-    warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer,
-        start_factor=0.1, 
-        end_factor=1.0,
-        total_iters=warmup_epochs
-    )
 
     cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
         T_max=cosine_epochs,
-        eta_min=config.lr * 0.05 
+        eta_min=config.lr * 0.05
     )
 
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup, cosine],
-        milestones=[warmup_epochs]
-    )
+    if warmup_epochs > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=warmup_epochs
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup, cosine],
+            milestones=[warmup_epochs]
+        )
+    else:
+        scheduler = cosine
 
     if config.loss == "mse":
         criterion = nn.MSELoss()
