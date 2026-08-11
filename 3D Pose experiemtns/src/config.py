@@ -16,7 +16,7 @@ def create_argparser():
     parser.add_argument("--multiprocessing", type=bool, default=False)
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     parser.add_argument("--encoder", type=str, default="resnet",

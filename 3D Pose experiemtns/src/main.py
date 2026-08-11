@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, CliffordFlow
 # from src.img_to_pcd_stuff import I2P, DummyNet
 from src.img_to_pcd_2 import I2P, I2P_IPDF
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
@@ -72,6 +72,8 @@ def instantiate(config):
         )
     elif config.model == "dummynet":
         model = DummyNet()
+    elif config.model == "clifford_flow":
+        model = CliffordFlow(algebra, hidden_dim=config.hidden_dim)
     else:
         raise ValueError(f"Unknown model: {config.model}")
     

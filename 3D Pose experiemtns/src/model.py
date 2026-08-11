@@ -6,6 +6,8 @@ from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
 from src.image_encoders import build_encoder
+from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
+from src.flow_matching_utils import geodesic_interpolate, relative_log, rotor_multiply, exp_map
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import List,Union
@@ -241,6 +243,89 @@ class TralaleroTralala(nn.Module):
         return x
 
 
+def _ga_to_canonical_mv(mv_grid, mv_dim):
+    if mv_grid.shape[1] == mv_dim:
+        return mv_grid
+    e, e123, e1, e2, e13, e23 = torch.unbind(mv_grid, dim=1)
+    zeros = torch.zeros_like(e)
+    return torch.stack([e, e1, e2, zeros, zeros, e13, e23, e123], dim=1)
+
+
+class ImageToMultivectors(nn.Module):
+    # ResNet -> HeatMap -> ConvAdapter -> n multivectors (grid x grid)
+    def __init__(self, algebra, grid=16):
+        super().__init__()
+        mv_dim = 2**algebra.dim
+        self.backbone = build_encoder("resnet")
+        backbone_channels = self.backbone.output_shape[0]
+
+        self.conv_adapter = nn.Sequential(
+            nn.Conv2d(backbone_channels, 256, kernel_size=1, bias=False),
+            nn.BatchNorm2d(256), nn.SiLU(inplace=True),
+            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(64), nn.SiLU(inplace=True),
+            nn.Conv2d(64, mv_dim, kernel_size=1, bias=True),
+            nn.AdaptiveAvgPool2d((grid, grid)),
+        )
+        self.n_mv = grid * grid
+
+    def forward(self, x):
+        fmap = self.backbone(x)
+        adapted = self.conv_adapter(fmap)
+        return adapted.flatten(2).transpose(1, 2)
+
+
+class CliffordFlow(nn.Module):
+    def __init__(self, algebra, hidden_dim=[32]):
+        super().__init__()
+        self.algebra = algebra
+        self.adapter = ImageToMultivectors(algebra)
+        self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=1)
+        self.vector_field = TralaleroTralala(algebra, in_features=3, hidden_dim=hidden_dim, out_features=1)
+
+        nn.init.zeros_(self.vector_field.out.weight)
+        nn.init.zeros_(self.vector_field.out.linear_left.weight)
+
+    def condition(self, x):
+        mv = self.adapter(x)
+        return self.condition_head(mv)[:, 0]
+
+    def velocity(self, rotor, t, cond_mv):
+        rotor_mv = embed_rotor(rotor, self.algebra)
+        t_mv = self.algebra.embed(t.reshape(-1, 1), (0,))
+        inp = torch.stack([rotor_mv, t_mv, cond_mv], dim=1)
+        out = self.vector_field(inp)[:, 0]
+        return self.algebra.get_grade(out, 2)
+
+    def forward(self, x, rotor, t):
+        return self.velocity(rotor, t, self.condition(x))
+
+    def compute_loss(self, img, rot_gt, criterion=None):
+        cond_mv = self.condition(img)
+
+        r1 = matrix_to_rotor(rot_gt)
+        r0 = random_rotor(r1.shape[0]).to(r1.device)
+        t = torch.rand(r1.shape[0], device=r1.device)
+
+        rt = geodesic_interpolate(r0, r1, t, self.algebra)
+        target = relative_log(r0, r1, self.algebra)
+        pred = self.velocity(rt, t, cond_mv)
+        return (pred - target).pow(2).sum(-1).mean()
+
+    @torch.no_grad()
+    def predict(self, x, steps=20):
+        cond_mv = self.condition(x)
+        rotor = random_rotor(x.shape[0]).to(x.device)
+
+        dt = 1.0 / steps
+        for i in range(steps):
+            t = torch.full((x.shape[0],), i * dt, device=x.device)
+            v = self.velocity(rotor, t, cond_mv)
+            rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
+
+        return rotor_to_matrix(rotor, self.algebra)
+
+
 class TralaleroCompetitor(nn.Module):
     def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
         super().__init__()
@@ -267,25 +352,11 @@ class TralaleroCompetitor(nn.Module):
 
         self.ga_head = TralaleroTralala(algebra, in_features=self._n_mv)
 
-    def _ga_to_canonical_mv(self, mv_grid: torch.Tensor) -> torch.Tensor:
-        if mv_grid.shape[1] == self._mv_dim:
-            return mv_grid
-
-        if mv_grid.shape[1] != 6:
-            raise ValueError(
-                f"Unsupported GA encoder channels: expected 6 or {self._mv_dim}, got {mv_grid.shape[1]}"
-            )
-
-        e, e123, e1, e2, e13, e23 = torch.unbind(mv_grid, dim=1)
-        zeros = torch.zeros_like(e)
-        return torch.stack([e, e1, e2, zeros, zeros, e13, e23, e123], dim=1)
-
-
     def forward(self, x):
         if self._use_ga_backbone:
             pooled_x = self.pre_encode_pool(x)
             mv_grid = self.backbone(pooled_x)
-            mv_grid = self._ga_to_canonical_mv(mv_grid)
+            mv_grid = _ga_to_canonical_mv(mv_grid, self._mv_dim)
             b, mv_dim, h, w = mv_grid.shape
             x = mv_grid.permute(0, 2, 3, 1).reshape(b, h * w, mv_dim)
         else:
