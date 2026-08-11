@@ -280,20 +280,21 @@ class CliffordFlow(nn.Module):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra)
-        self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=1)
-        self.vector_field = TralaleroTralala(algebra, in_features=3, hidden_dim=hidden_dim, out_features=1)
+        self.n_cond_mv = 4
+        self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
+        self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
 
         nn.init.zeros_(self.vector_field.out.weight)
         nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
     def condition(self, x):
         mv = self.adapter(x)
-        return self.condition_head(mv)[:, 0]
+        return self.condition_head(mv)
 
     def velocity(self, rotor, t, cond_mv):
-        rotor_mv = embed_rotor(rotor, self.algebra)
-        t_mv = self.algebra.embed(t.reshape(-1, 1), (0,))
-        inp = torch.stack([rotor_mv, t_mv, cond_mv], dim=1)
+        rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
+        t_mv = self.algebra.embed(t.reshape(-1, 1), (0,)).unsqueeze(1)
+        inp = torch.cat([rotor_mv, t_mv, cond_mv], dim=1)
         out = self.vector_field(inp)[:, 0]
         return self.algebra.get_grade(out, 2)
 
