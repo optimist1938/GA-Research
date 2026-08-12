@@ -33,6 +33,9 @@ def create_argparser():
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
 
+    # Clifford Flow
+    parser.add_argument("--n_cond_mv", type=int, default=4)
+
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)
     parser.add_argument("--n_train_queries", type=int, default=4096)

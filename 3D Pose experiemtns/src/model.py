@@ -276,11 +276,11 @@ class ImageToMultivectors(nn.Module):
 
 
 class CliffordFlow(nn.Module):
-    def __init__(self, algebra, hidden_dim=[32]):
+    def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra)
-        self.n_cond_mv = 4
+        self.n_cond_mv = n_cond_mv
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
         self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
 
@@ -312,21 +312,6 @@ class CliffordFlow(nn.Module):
         target = relative_log(r0, r1, self.algebra)
         pred = self.velocity(rt, t, cond_mv)
         return (pred - target).pow(2).sum(-1).mean()
-
-    @torch.no_grad()
-    def predict(self, x):
-        steps = 20
-        cond_mv = self.condition(x)
-        rotor = random_rotor(x.shape[0]).to(x.device)
-
-        dt = 1.0 / steps
-        for i in range(steps):
-            t = torch.full((x.shape[0],), i * dt, device=x.device)
-            v = self.velocity(rotor, t, cond_mv)
-            rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
-
-        return rotor_to_matrix(rotor, self.algebra)
-
 
 class TralaleroCompetitor(nn.Module):
     def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):

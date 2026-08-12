@@ -73,7 +73,7 @@ def instantiate(config):
     elif config.model == "dummynet":
         model = DummyNet()
     elif config.model == "clifford_flow":
-        model = CliffordFlow(algebra, hidden_dim=config.hidden_dim)
+        model = CliffordFlow(algebra, hidden_dim=config.hidden_dim, n_cond_mv=config.n_cond_mv)
     else:
         raise ValueError(f"Unknown model: {config.model}")
     
