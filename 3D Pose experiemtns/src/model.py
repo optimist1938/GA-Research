@@ -313,6 +313,21 @@ class CliffordFlow(nn.Module):
         pred = self.velocity(rt, t, cond_mv)
         return (pred - target).pow(2).sum(-1).mean()
 
+    @torch.no_grad()
+    def predict(self, x):
+        steps = 20
+        cond_mv = self.condition(x)
+        rotor = random_rotor(x.shape[0]).to(x.device)
+
+        dt = 1.0 / steps
+        for i in range(steps):
+            t = torch.full((x.shape[0],), i * dt, device=x.device)
+            v = self.velocity(rotor, t, cond_mv)
+            rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
+
+        return rotor_to_matrix(rotor, self.algebra)
+
+
 class TralaleroCompetitor(nn.Module):
     def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
         super().__init__()
