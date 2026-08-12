@@ -25,6 +25,7 @@ class I2S(nn.Module):
         hidden_dim: List = [32],
         temperature: float = 1.0,
         encoder_type: str = "resnet",
+        pretrained_backbone: bool = False,
     ):
         super().__init__()
         self.algebra = algebra
@@ -32,7 +33,7 @@ class I2S(nn.Module):
         self.rec_level = int(rec_level)
         self.temperature = float(temperature)
 
-        self.encoder = build_encoder(encoder_type)
+        self.encoder = build_encoder(encoder_type, pretrained=pretrained_backbone)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         enc_channels = getattr(self.encoder, "output_shape", None)[0]
@@ -253,10 +254,10 @@ def _ga_to_canonical_mv(mv_grid, mv_dim):
 
 class ImageToMultivectors(nn.Module):
     # ResNet -> HeatMap -> ConvAdapter -> n multivectors (grid x grid)
-    def __init__(self, algebra, grid=16):
+    def __init__(self, algebra, grid=16, pretrained_backbone: bool = False):
         super().__init__()
         mv_dim = 2**algebra.dim
-        self.backbone = build_encoder("resnet")
+        self.backbone = build_encoder("resnet", pretrained=pretrained_backbone)
         backbone_channels = self.backbone.output_shape[0]
 
         self.conv_adapter = nn.Sequential(
@@ -276,10 +277,10 @@ class ImageToMultivectors(nn.Module):
 
 
 class CliffordFlow(nn.Module):
-    def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4):
+    def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False):
         super().__init__()
         self.algebra = algebra
-        self.adapter = ImageToMultivectors(algebra)
+        self.adapter = ImageToMultivectors(algebra, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
         self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
@@ -329,7 +330,8 @@ class CliffordFlow(nn.Module):
 
 
 class TralaleroCompetitor(nn.Module):
-    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28)):
+    def __init__(self, algebra, encoder_type: str = "resnet", ga_pool_hw: tuple = (28, 28),
+                 pretrained_backbone: bool = False):
         super().__init__()
         self.algebra = algebra
         self._use_ga_backbone = encoder_type in {"ga", "ga_canonical"}
@@ -343,11 +345,11 @@ class TralaleroCompetitor(nn.Module):
                 raise ValueError("ga_pool_hw values must be positive")
 
             self.pre_encode_pool = nn.AdaptiveAvgPool2d(self.ga_pool_hw)
-            self.backbone = build_encoder(encoder_type)
+            self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone)
             self._n_mv = int(self.ga_pool_hw[0] * self.ga_pool_hw[1])
         else:
             self._n_mv = 8
-            self.backbone = build_encoder(encoder_type)
+            self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone)
             self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
             enc_channels = getattr(self.backbone, "output_shape", None)[0]
             self.projective_matrix = nn.Linear(enc_channels, self._n_mv * self._mv_dim)
@@ -376,9 +378,9 @@ class TralaleroCompetitor(nn.Module):
 
 
 class MLPBaseline(nn.Module):
-    def __init__(self, encoder_type: str = "resnet"):
+    def __init__(self, encoder_type: str = "resnet", pretrained_backbone: bool = False):
         super().__init__()
-        self.backbone = build_encoder(encoder_type)
+        self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         enc_channels = getattr(self.backbone, "output_shape", None)[0]
         self.linear_head = nn.Linear(in_features=enc_channels, out_features=9)

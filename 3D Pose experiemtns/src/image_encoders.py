@@ -101,6 +101,28 @@ class GAEncoderCanonical(nn.Module):
     self.output_shape = tuple(out.shape[1:])
     return out
 
+_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+class ImageNetNormalized(nn.Module):
+  '''Applies ImageNet mean/std before handing the image to a pretrained backbone.
+
+  Pascal3D delivers images in [0, 1], which is not what torchvision's pretrained
+  weights were trained on, so the backbone needs the standard normalization to
+  make use of them.
+  '''
+  def __init__(self, encoder):
+    super().__init__()
+    self.encoder = encoder
+    self.output_shape = encoder.output_shape
+    self.register_buffer("mean", torch.tensor(_IMAGENET_MEAN).view(1, 3, 1, 1))
+    self.register_buffer("std", torch.tensor(_IMAGENET_STD).view(1, 3, 1, 1))
+
+  def forward(self, x):
+    return self.encoder((x - self.mean) / self.std)
+
+
 class ImageEncoder(nn.Module):
   '''Define an image encoding network to process image into dense feature map
 
@@ -129,10 +151,11 @@ class ImageEncoder(nn.Module):
     return self.layers(x)
 
 
-def build_encoder(encoder_type: str):
+def build_encoder(encoder_type: str, pretrained: bool = False):
   if encoder_type == "resnet":
     from image2sphere.models import ResNet
-    return ResNet()
+    encoder = ResNet(pretrained=pretrained)
+    return ImageNetNormalized(encoder) if pretrained else encoder
   if encoder_type == "ga":
     return GAEncoder()
   if encoder_type == "ga_canonical":

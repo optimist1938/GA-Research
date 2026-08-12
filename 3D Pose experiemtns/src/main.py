@@ -34,9 +34,10 @@ def instantiate(config):
             algebra,
             encoder_type=config.encoder,
             ga_pool_hw=tuple(config.ga_pool_hw),
+            pretrained_backbone=config.pretrained_backbone,
         )
     elif config.model == "mlp":
-        model = MLPBaseline(encoder_type=config.encoder)
+        model = MLPBaseline(encoder_type=config.encoder, pretrained_backbone=config.pretrained_backbone)
     elif config.model == "i2s":
         model = I2S(
             algebra=algebra,
@@ -46,6 +47,7 @@ def instantiate(config):
             hidden_dim=config.hidden_dim,
             temperature=config.temperature,
             encoder_type=config.encoder,
+            pretrained_backbone=config.pretrained_backbone,
         )
     elif config.model == "ga_i2s":
         model = GA_I2S(
@@ -73,7 +75,12 @@ def instantiate(config):
     elif config.model == "dummynet":
         model = DummyNet()
     elif config.model == "clifford_flow":
-        model = CliffordFlow(algebra, hidden_dim=config.hidden_dim, n_cond_mv=config.n_cond_mv)
+        model = CliffordFlow(
+            algebra,
+            hidden_dim=config.hidden_dim,
+            n_cond_mv=config.n_cond_mv,
+            pretrained_backbone=config.pretrained_backbone,
+        )
     else:
         raise ValueError(f"Unknown model: {config.model}")
     
