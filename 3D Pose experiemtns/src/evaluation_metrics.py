@@ -53,12 +53,24 @@ def rotation_error_with_projection(input, target):
 
 
 def _supports_class_argument(method) -> bool:
-    params = list(inspect.signature(method).parameters.values())
-    return any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 2
+    # Only positional parameters can receive the class tensor; keyword-only
+    # options such as n_samples must not be mistaken for one.
+    positional = [
+        p for p in inspect.signature(method).parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return any(p.kind == inspect.Parameter.VAR_POSITIONAL
+               for p in inspect.signature(method).parameters.values()) or len(positional) >= 2
+
+
+def _sampling_kwargs(method, n_samples: int) -> dict:
+    if n_samples > 1 and "n_samples" in inspect.signature(method).parameters:
+        return {"n_samples": n_samples}
+    return {}
 
 
 @torch.no_grad()
-def calculate_evaluation_metrics(model, loader, config):
+def calculate_evaluation_metrics(model, loader, config, n_samples: int = 1):
     device = config.device
     err = []
 
@@ -70,12 +82,13 @@ def calculate_evaluation_metrics(model, loader, config):
         clas = None
         if "cls" in batch:
             clas = batch["cls"].to(device)
-        
+
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
+            kwargs = _sampling_kwargs(model.predict, n_samples)
             if clas is not None and _supports_class_argument(model.predict):
-                pred_rotmat = model.predict(img, clas)
+                pred_rotmat = model.predict(img, clas, **kwargs)
             else:
-                pred_rotmat = model.predict(img)
+                pred_rotmat = model.predict(img, **kwargs)
         else:
             pred_rotmat = model(img)
 

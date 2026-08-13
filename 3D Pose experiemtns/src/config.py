@@ -35,6 +35,8 @@ def create_argparser():
     # Caching freezes Pascal3D's geometric augmentation, so cache several draws of it.
     parser.add_argument("--cache_draws", type=int, default=1)
     parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
+    # Samples per image for the multi-sample evaluation run after the last epoch.
+    parser.add_argument("--eval_samples", type=int, default=32)
 
     # Clifford Flow
     parser.add_argument("--n_cond_mv", type=int, default=4)

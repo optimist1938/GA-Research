@@ -7,7 +7,7 @@ from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
 from src.image_encoders import build_encoder
 from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
-from src.flow_matching_utils import geodesic_interpolate, relative_log, rotor_multiply, exp_map
+from src.flow_matching_utils import geodesic_interpolate, geodesic_distance, relative_log, rotor_multiply, exp_map
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import List,Union
@@ -314,17 +314,44 @@ class CliffordFlow(nn.Module):
         pred = self.velocity(rt, t, cond_mv)
         return (pred - target).pow(2).sum(-1).mean()
 
+    def _medoid(self, rotors):
+        '''Pick the sample closest to all the others, per batch item.
+
+        The flow defines a distribution over poses, so a single draw is just one
+        mode -- for symmetric objects, a randomly chosen one. The medoid under
+        geodesic distance approximates the dominant mode without needing a
+        density estimate.
+
+        :param rotors: (B, K, 4)
+        returns : (B, 4)
+        '''
+        b, k, _ = rotors.shape
+        a = rotors.unsqueeze(2).expand(b, k, k, 4).reshape(-1, 4)
+        c = rotors.unsqueeze(1).expand(b, k, k, 4).reshape(-1, 4)
+        dist = geodesic_distance(a, c, self.algebra).view(b, k, k)
+        idx = dist.sum(-1).argmin(-1)
+        return rotors[torch.arange(b, device=rotors.device), idx]
+
     @torch.no_grad()
-    def predict(self, x):
-        steps = 20
+    def predict(self, x, *, n_samples: int = 1, steps: int = 20):
+        b = x.shape[0]
+        n_samples = max(1, int(n_samples))
+
         cond_mv = self.condition(x)
-        rotor = random_rotor(x.shape[0]).to(x.device)
+        if n_samples > 1:
+            cond_mv = cond_mv.repeat_interleave(n_samples, dim=0)
+
+        n = b * n_samples
+        rotor = random_rotor(n).to(x.device)
 
         dt = 1.0 / steps
         for i in range(steps):
-            t = torch.full((x.shape[0],), i * dt, device=x.device)
+            t = torch.full((n,), i * dt, device=x.device)
             v = self.velocity(rotor, t, cond_mv)
             rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
+
+        if n_samples > 1:
+            rotor = self._medoid(rotor.view(b, n_samples, 4))
 
         return rotor_to_matrix(rotor, self.algebra)
 

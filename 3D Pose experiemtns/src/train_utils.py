@@ -2,7 +2,7 @@ import torch
 import inspect
 from tqdm import tqdm
 from pathlib import Path
-from src.evaluation_metrics import calculate_evaluation_metrics
+from src.evaluation_metrics import calculate_evaluation_metrics, acc_at
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -161,3 +161,33 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             f"Train loss {train_loss}, val loss {val_loss}\n"
             f"Median rotation error {mre}"
         )
+
+    final_evaluation(model, val_loader, run, config)
+
+
+def final_evaluation(model, val_loader, run, config):
+    '''Re-score the trained model with multi-sample prediction.
+
+    Per-epoch metrics use a single draw so they stay cheap; a generative model
+    deserves a proper mode estimate once, at the end.
+    '''
+    n_samples = getattr(config, "eval_samples", 1)
+    if n_samples <= 1:
+        return None
+
+    err = calculate_evaluation_metrics(model, val_loader, config, n_samples=n_samples)
+    metrics = {
+        "final_median_rotation_error": float(np.median(err)),
+        "final_acc@15": acc_at(err, 15),
+        "final_acc@30": acc_at(err, 30),
+        "final_eval_samples": n_samples,
+    }
+
+    print(
+        f"Final evaluation with {n_samples} samples per image: "
+        f"median rotation error {metrics['final_median_rotation_error']}, "
+        f"acc@15 {metrics['final_acc@15']}, acc@30 {metrics['final_acc@30']}"
+    )
+    if run is not None:
+        run.summary.update(metrics)
+    return metrics
