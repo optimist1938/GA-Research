@@ -32,6 +32,9 @@ def create_argparser():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+    # Caching freezes Pascal3D's geometric augmentation, so cache several draws of it.
+    parser.add_argument("--cache_draws", type=int, default=1)
+    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
 
     # Clifford Flow
     parser.add_argument("--n_cond_mv", type=int, default=4)
