@@ -277,11 +277,13 @@ class ImageToMultivectors(nn.Module):
 
 
 class CliffordFlow(nn.Module):
-    def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False):
+    def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
+                 n_time_samples: int = 1):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
+        self.n_time_samples = max(1, int(n_time_samples))
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
         self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
 
@@ -303,15 +305,27 @@ class CliffordFlow(nn.Module):
         return self.velocity(rotor, t, self.condition(x))
 
     def compute_loss(self, img, rot_gt, criterion=None):
+        # The backbone forward dominates the step cost while the vector field is
+        # small, so drawing several (t, r0) pairs per image buys that many more
+        # flow-matching samples for one shared conditioning pass.
         cond_mv = self.condition(img)
-
         r1 = matrix_to_rotor(rot_gt)
-        r0 = random_rotor(r1.shape[0]).to(r1.device)
-        t = torch.rand(r1.shape[0], device=r1.device)
+
+        k = self.n_time_samples
+        if k > 1:
+            # Both are interleaved the same way, so index i * k + j stays paired
+            # with image i.
+            cond_mv = cond_mv.repeat_interleave(k, dim=0)
+            r1 = r1.repeat_interleave(k, dim=0)
+
+        n = r1.shape[0]
+        r0 = random_rotor(n).to(r1.device)
+        t = torch.rand(n, device=r1.device)
 
         rt = geodesic_interpolate(r0, r1, t, self.algebra)
         target = relative_log(r0, r1, self.algebra)
         pred = self.velocity(rt, t, cond_mv)
+        # Still a per-sample mean, so the value stays comparable across k.
         return (pred - target).pow(2).sum(-1).mean()
 
     def _medoid(self, rotors):

@@ -37,6 +37,8 @@ def create_argparser():
 
     # Clifford Flow
     parser.add_argument("--n_cond_mv", type=int, default=4)
+    # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
+    parser.add_argument("--n_time_samples", type=int, default=1)
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)
