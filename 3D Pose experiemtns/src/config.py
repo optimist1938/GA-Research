@@ -32,9 +32,6 @@ def create_argparser():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
-    # Caching freezes Pascal3D's geometric augmentation, so cache several draws of it.
-    parser.add_argument("--cache_draws", type=int, default=1)
-    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
     # Samples per image for the multi-sample evaluation run after the last epoch.
     parser.add_argument("--eval_samples", type=int, default=32)
 

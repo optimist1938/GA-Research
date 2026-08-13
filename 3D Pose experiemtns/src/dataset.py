@@ -50,24 +50,6 @@ def _load_chunk(args):
     return torch.stack(imgs, dim=0), torch.stack(rots, dim=0)
 
 
-def build_photometric_augmentation():
-    '''Label-preserving augmentation for cached Pascal3D images.
-
-    Only photometric operations belong here. Any spatial transform also changes
-    the camera-to-object rotation, and Pascal3D already applies its geometric
-    augmentation (flip, up-direction jitter, bounding box jitter) inside
-    __getitem__ where it can correct the label alongside the pixels. Caching is
-    what freezes that; n_draws below is how we get it back.
-    '''
-    from torchvision.transforms import v2
-
-    return v2.Compose([
-        v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05),
-        v2.RandomGrayscale(p=0.1),
-        v2.RandomErasing(p=0.25, scale=(0.02, 0.15), value=0.0),
-    ])
-
-
 class InMemoryDataset(Dataset):
     def __init__(
         self,
@@ -78,17 +60,12 @@ class InMemoryDataset(Dataset):
         img_key: str = "img",
         rot_key: str = "rot",
         use_multiprocessing: bool = False,
-        n_draws: int = 1,
-        augment=None,
     ):
         self.base = base
         self.img_key = img_key
         self.rot_key = rot_key
-        self.augment = augment
 
         n = len(base)
-        self.n = n
-        self.n_draws = max(1, int(n_draws))
 
         sample = base[0]
         img0 = sample[img_key]
@@ -97,37 +74,23 @@ class InMemoryDataset(Dataset):
         c, h, w = img0.shape
         rot_shape = rot0.shape
 
-        total = n * self.n_draws
         if store_uint8:
-            self.imgs = torch.empty((total, c, h, w), dtype=torch.uint8)
+            self.imgs = torch.empty((n, c, h, w), dtype=torch.uint8)
         else:
-            self.imgs = torch.empty((total, c, h, w), dtype=torch.float32)
+            self.imgs = torch.empty((n, c, h, w), dtype=torch.float32)
 
-        self.targets = torch.empty((total, *rot_shape), dtype=torch.float32)
+        self.targets = torch.empty((n, *rot_shape), dtype=torch.float32)
 
         self.store_uint8 = store_uint8
-
-        # Each pass over `base` re-runs its stochastic geometric augmentation and
-        # returns a matching rotation, so the draws differ in pose as well as pixels.
-        for draw in range(self.n_draws):
-            desc = "Loading data into RAM"
-            if self.n_draws > 1:
-                desc += f" (draw {draw + 1}/{self.n_draws})"
-            self._fill(base, draw * n, build_workers, build_batch_size, use_multiprocessing, desc)
-
-    def _fill(self, base, offset, build_workers, build_batch_size, use_multiprocessing, desc):
-        img_key, rot_key = self.img_key, self.rot_key
-        store_uint8 = self.store_uint8
-        n = self.n
 
         if use_multiprocessing:
             ctx = mp.get_context("spawn")
             chunks = _iter_chunks(n, build_batch_size)
             tasks = ((base, chunk, img_key, rot_key) for chunk in chunks)
 
-            write_pos = offset
+            write_pos = 0
             with ctx.Pool(processes=max(1, build_workers)) as pool:
-                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc=desc):
+                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc="Loading data into RAM"):
                     bsz = imgs.shape[0]
 
                     if store_uint8:
@@ -153,8 +116,8 @@ class InMemoryDataset(Dataset):
                 collate_fn=_collate_keep(img_key, rot_key),
             )
 
-            write_pos = offset
-            for imgs, rots in tqdm(loader, desc=desc):
+            write_pos = 0
+            for imgs, rots in tqdm(loader, desc="Loading data into RAM"):
                 bsz = imgs.shape[0]
 
                 if store_uint8:
@@ -170,20 +133,13 @@ class InMemoryDataset(Dataset):
                 write_pos += bsz
 
     def __len__(self):
-        return self.n
+        return self.imgs.shape[0]
 
     def __getitem__(self, idx):
-        if self.n_draws > 1:
-            draw = int(torch.randint(self.n_draws, (1,)).item())
-            idx = draw * self.n + idx
-
         x = self.imgs[idx]
         if self.store_uint8:
             x = x.to(torch.float32) / 255.0
         y = self.targets[idx]
-
-        if self.augment is not None:
-            x = self.augment(x)
         return {"img": x, "rot": y}
 
 
@@ -195,14 +151,7 @@ def create_dataloaders(config):
         train = Pascal3D(config.path_to_datasets, train=True)
         val = Pascal3D(config.path_to_datasets, train=False)
         num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(
-            train,
-            build_workers=num_builder,
-            use_multiprocessing=config.multiprocessing,
-            n_draws=config.cache_draws,
-            augment=build_photometric_augmentation() if config.augment else None,
-        ) if config.ram_memory else train
-        # Validation stays deterministic: no augmentation, a single cached draw.
+        train_dataset = InMemoryDataset(train,build_workers=num_builder, use_multiprocessing=config.multiprocessing) if config.ram_memory else train
         val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
