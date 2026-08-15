@@ -278,10 +278,10 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1):
+                 n_time_samples: int = 1, adapter_grid: int = 16):
         super().__init__()
         self.algebra = algebra
-        self.adapter = ImageToMultivectors(algebra, pretrained_backbone=pretrained_backbone)
+        self.adapter = ImageToMultivectors(algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
