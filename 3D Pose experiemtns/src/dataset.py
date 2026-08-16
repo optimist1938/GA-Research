@@ -60,12 +60,15 @@ class InMemoryDataset(Dataset):
         img_key: str = "img",
         rot_key: str = "rot",
         use_multiprocessing: bool = False,
+        n_draws: int = 1,
     ):
         self.base = base
         self.img_key = img_key
         self.rot_key = rot_key
 
         n = len(base)
+        self.n = n
+        self.n_draws = max(1, int(n_draws))
 
         sample = base[0]
         img0 = sample[img_key]
@@ -74,23 +77,40 @@ class InMemoryDataset(Dataset):
         c, h, w = img0.shape
         rot_shape = rot0.shape
 
+        total = n * self.n_draws
         if store_uint8:
-            self.imgs = torch.empty((n, c, h, w), dtype=torch.uint8)
+            self.imgs = torch.empty((total, c, h, w), dtype=torch.uint8)
         else:
-            self.imgs = torch.empty((n, c, h, w), dtype=torch.float32)
+            self.imgs = torch.empty((total, c, h, w), dtype=torch.float32)
 
-        self.targets = torch.empty((n, *rot_shape), dtype=torch.float32)
+        self.targets = torch.empty((total, *rot_shape), dtype=torch.float32)
 
         self.store_uint8 = store_uint8
+
+        gib = (self.imgs.element_size() * self.imgs.nelement()) / 2**30
+        print(f"Caching {n} samples x {self.n_draws} draw(s) = {total} rows, {gib:.2f} GiB")
+
+        # Each pass re-runs whatever randomness the base dataset applies in
+        # __getitem__, so with use_warp the draws differ in pose as well as pixels.
+        for draw in range(self.n_draws):
+            desc = "Loading data into RAM"
+            if self.n_draws > 1:
+                desc += f" (draw {draw + 1}/{self.n_draws})"
+            self._fill(base, draw * n, build_workers, build_batch_size, use_multiprocessing, desc)
+
+    def _fill(self, base, offset, build_workers, build_batch_size, use_multiprocessing, desc):
+        img_key, rot_key = self.img_key, self.rot_key
+        store_uint8 = self.store_uint8
+        n = self.n
 
         if use_multiprocessing:
             ctx = mp.get_context("spawn")
             chunks = _iter_chunks(n, build_batch_size)
             tasks = ((base, chunk, img_key, rot_key) for chunk in chunks)
 
-            write_pos = 0
+            write_pos = offset
             with ctx.Pool(processes=max(1, build_workers)) as pool:
-                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc="Loading data into RAM"):
+                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc=desc):
                     bsz = imgs.shape[0]
 
                     if store_uint8:
@@ -116,8 +136,8 @@ class InMemoryDataset(Dataset):
                 collate_fn=_collate_keep(img_key, rot_key),
             )
 
-            write_pos = 0
-            for imgs, rots in tqdm(loader, desc="Loading data into RAM"):
+            write_pos = offset
+            for imgs, rots in tqdm(loader, desc=desc):
                 bsz = imgs.shape[0]
 
                 if store_uint8:
@@ -133,9 +153,13 @@ class InMemoryDataset(Dataset):
                 write_pos += bsz
 
     def __len__(self):
-        return self.imgs.shape[0]
+        return self.n
 
     def __getitem__(self, idx):
+        if self.n_draws > 1:
+            draw = int(torch.randint(self.n_draws, (1,)).item())
+            idx = draw * self.n + idx
+
         x = self.imgs[idx]
         if self.store_uint8:
             x = x.to(torch.float32) / 255.0
@@ -148,10 +172,25 @@ def create_dataloaders(config):
         train_dataset = DummyPointCloudDataset(config, size=1000)
         val_dataset = DummyPointCloudDataset(config, size=100)
     elif not config.sanity_check:
-        train = Pascal3D(config.path_to_datasets, train=True)
+        train = Pascal3D(config.path_to_datasets, train=True,
+                         use_warp=config.use_warp, use_synth=config.use_synth)
+        # Pascal3D asserts use_warp/use_synth are off for the test split.
         val = Pascal3D(config.path_to_datasets, train=False)
+
+        if config.use_synth and len(train.synth_dataset.files) == 0:
+            raise FileNotFoundError(
+                "--use_synth found no RenderForCNN images under "
+                f"{config.path_to_datasets}/syn_images_cropped_bkg_overlaid/<synset>/*/*.png"
+            )
+        if config.use_warp and config.ram_memory and config.cache_draws == 1:
+            print("WARNING: --ram_memory caches one draw per image, which freezes the "
+                  "augmentation --use_warp just enabled. Pass --cache_draws > 1.")
+
         num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(train,build_workers=num_builder, use_multiprocessing=config.multiprocessing) if config.ram_memory else train
+        train_dataset = InMemoryDataset(train, build_workers=num_builder,
+                                        use_multiprocessing=config.multiprocessing,
+                                        n_draws=config.cache_draws) if config.ram_memory else train
+        # Validation stays deterministic: one draw, no augmentation.
         val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)

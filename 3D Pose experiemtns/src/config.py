@@ -33,6 +33,13 @@ def create_argparser():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+    # Pascal3D's own augmentation (flip, up-direction jitter, bbox jitter), which
+    # rewrites the rotation label alongside the pixels. Off by default upstream.
+    parser.add_argument("--use_warp", action=argparse.BooleanOptionalAction, default=False)
+    # RenderForCNN synthetic images; needs a separate download.
+    parser.add_argument("--use_synth", action=argparse.BooleanOptionalAction, default=False)
+    # Independent augmented passes to cache, so --ram_memory does not freeze --use_warp.
+    parser.add_argument("--cache_draws", type=int, default=1)
     # Samples per image for the multi-sample evaluation run after the last epoch.
     parser.add_argument("--eval_samples", type=int, default=32)
 
