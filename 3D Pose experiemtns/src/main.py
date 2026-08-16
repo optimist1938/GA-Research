@@ -82,6 +82,7 @@ def instantiate(config):
             pretrained_backbone=config.pretrained_backbone,
             n_time_samples=config.n_time_samples,
             adapter_grid=config.adapter_grid,
+            encoder_type=config.encoder,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

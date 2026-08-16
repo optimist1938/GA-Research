@@ -151,10 +151,17 @@ class ImageEncoder(nn.Module):
     return self.layers(x)
 
 
+_RESNET_SIZES = {"resnet": 50, "resnet50": 50, "resnet101": 101}
+
+
+def is_resnet(encoder_type: str) -> bool:
+  return encoder_type in _RESNET_SIZES
+
+
 def build_encoder(encoder_type: str, pretrained: bool = False):
-  if encoder_type == "resnet":
+  if encoder_type in _RESNET_SIZES:
     from image2sphere.models import ResNet
-    encoder = ResNet(pretrained=pretrained)
+    encoder = ResNet(size=_RESNET_SIZES[encoder_type], pretrained=pretrained)
     return ImageNetNormalized(encoder) if pretrained else encoder
   if encoder_type == "ga":
     return GAEncoder()

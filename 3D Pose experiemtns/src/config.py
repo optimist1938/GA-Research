@@ -20,8 +20,9 @@ def create_argparser():
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
+    # "resnet" is an alias for resnet50, kept as the default for continuity.
     parser.add_argument("--encoder", type=str, default="resnet",
-                        choices=["resnet", "ga", "ga_canonical"])
+                        choices=["resnet", "resnet50", "resnet101", "ga", "ga_canonical"])
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)

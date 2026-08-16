@@ -5,7 +5,7 @@ import torch.nn as nn
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
-from src.image_encoders import build_encoder
+from src.image_encoders import build_encoder, is_resnet
 from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
 from src.flow_matching_utils import geodesic_interpolate, geodesic_distance, relative_log, rotor_multiply, exp_map
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
@@ -254,10 +254,17 @@ def _ga_to_canonical_mv(mv_grid, mv_dim):
 
 class ImageToMultivectors(nn.Module):
     # ResNet -> HeatMap -> ConvAdapter -> n multivectors (grid x grid)
-    def __init__(self, algebra, grid=16, pretrained_backbone: bool = False):
+    def __init__(self, algebra, grid=16, pretrained_backbone: bool = False,
+                 encoder_type: str = "resnet"):
         super().__init__()
+        if not is_resnet(encoder_type):
+            # The conv adapter is sized from a deep CNN's channel count; the GA
+            # encoders emit a handful of channels at full resolution instead.
+            raise ValueError(
+                f"ImageToMultivectors expects a resnet backbone, got {encoder_type!r}"
+            )
         mv_dim = 2**algebra.dim
-        self.backbone = build_encoder("resnet", pretrained=pretrained_backbone)
+        self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone)
         backbone_channels = self.backbone.output_shape[0]
 
         self.conv_adapter = nn.Sequential(
@@ -278,10 +285,12 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, adapter_grid: int = 16):
+                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet"):
         super().__init__()
         self.algebra = algebra
-        self.adapter = ImageToMultivectors(algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone)
+        self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
+                                           pretrained_backbone=pretrained_backbone,
+                                           encoder_type=encoder_type)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
