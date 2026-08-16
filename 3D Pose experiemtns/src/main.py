@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, CliffordFlow
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, CliffordFlow, MLPFlow
 # from src.img_to_pcd_stuff import I2P, DummyNet
 from src.img_to_pcd_2 import I2P, I2P_IPDF
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
@@ -81,6 +81,13 @@ def instantiate(config):
             n_cond_mv=config.n_cond_mv,
             pretrained_backbone=config.pretrained_backbone,
             n_time_samples=config.n_time_samples,
+            adapter_grid=config.adapter_grid,
+            encoder_type=config.encoder,
+        )
+    elif config.model == "mlp_flow":
+        model = MLPFlow(
+            algebra,
+            pretrained_backbone=config.pretrained_backbone,
             adapter_grid=config.adapter_grid,
             encoder_type=config.encoder,
         )

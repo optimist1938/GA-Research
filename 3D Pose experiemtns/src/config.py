@@ -17,7 +17,7 @@ def create_argparser():
     parser.add_argument("--multiprocessing", type=bool, default=False)
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])
+                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow", "mlp_flow"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     # "resnet" is an alias for resnet50, kept as the default for continuity.
