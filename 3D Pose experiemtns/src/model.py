@@ -381,17 +381,6 @@ class CliffordFlow(nn.Module):
 
 
 class MLPFlow(nn.Module):
-    '''Baseline for CliffordFlow: same conv_adapter, same flow-matching
-    construction (geodesic interpolation, relative-log training target), but
-    SO(3) matrices instead of rotors and plain MLPs instead of CGENN -- no
-    Clifford algebra anywhere past the adapter. Isolates whether the CGENN
-    architecture is doing the work, or whether an ordinary MLP does just as
-    well given the same task and the same manifold-respecting training signal.
-
-    condition_mlp/field_mlp are sized to match condition_head+vector_field's
-    combined parameter count at hidden_dim=[32], n_cond_mv=64 (605,653 vs
-    605,657 params -- as close as clean layer widths get).
-    '''
     def __init__(self, algebra, cond_hidden: int = 210, cond_features: int = 512, field_hidden: int = 128,
                  pretrained_backbone: bool = False, adapter_grid: int = 16, encoder_type: str = "resnet"):
         super().__init__()
@@ -437,11 +426,6 @@ class MLPFlow(nn.Module):
         return (pred - target).pow(2).sum(-1).mean()
 
     def _medoid(self, mats):
-        '''Same idea as CliffordFlow._medoid, matrix version.
-
-        :param mats: (B, K, 3, 3)
-        returns : (B, 3, 3)
-        '''
         b, k = mats.shape[:2]
         a = mats.unsqueeze(2).expand(b, k, k, 3, 3).reshape(-1, 3, 3)
         c = mats.unsqueeze(1).expand(b, k, k, 3, 3).reshape(-1, 3, 3)
