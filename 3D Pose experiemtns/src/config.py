@@ -40,6 +40,8 @@ def create_argparser():
     parser.add_argument("--use_synth", action=argparse.BooleanOptionalAction, default=False)
     # Independent augmented passes to cache, so --ram_memory does not freeze --use_warp.
     parser.add_argument("--cache_draws", type=int, default=1)
+    # Cache the file reads instead of warped crops, keeping augmentation per-access.
+    parser.add_argument("--raw_cache", action=argparse.BooleanOptionalAction, default=False)
     # Samples per image for the multi-sample evaluation run after the last epoch.
     parser.add_argument("--eval_samples", type=int, default=32)
 

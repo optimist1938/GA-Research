@@ -1,8 +1,12 @@
 from image2sphere.pascal_dataset import Pascal3D
+import image2sphere.pascal_dataset as pascal_dataset_module
 import torch
-from image2sphere.pascal_dataset import Pascal3D
 from tqdm import tqdm
+import io
 import multiprocessing as mp
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import pathlib
 from src.img_to_pcd_stuff import MeshProcessor
@@ -48,6 +52,141 @@ def _load_chunk(args):
         imgs.append(sample[img_key])
         rots.append(sample[rot_key])
     return torch.stack(imgs, dim=0), torch.stack(rots, dim=0)
+
+
+class _CachedPIL:
+    '''Stands in for the PIL object Pascal3DReal.__getitem__ consumes.'''
+
+    def __init__(self, arr):
+        self._arr = arr
+        self.size = (arr.shape[1], arr.shape[0])   # PIL reports (width, height)
+
+    def convert(self, mode):
+        # Upstream discards the return value, so matching that is enough.
+        return self
+
+    def getdata(self):
+        # Upstream inspects data[0] to tell greyscale from colour and then
+        # reshapes; rows of three keep it on the colour branch, where the
+        # reshape reproduces the cached array exactly.
+        return self._arr.reshape(-1, 3)
+
+
+def _decode_like_upstream(path):
+    '''Decode a file the way Pascal3DReal.__getitem__ does, so pixels match bit for bit.'''
+    with open(path, "rb") as f:
+        img_PIL = Image.open(f)
+        img_PIL.convert("RGB")
+        data = img_PIL.getdata()
+        w, h = img_PIL.size
+        if isinstance(data[0], int) or len(data[0]) == h * w:
+            arr = np.array(data).reshape(h, w).reshape(h, w, 1).repeat(3, 2)
+        else:
+            arr = np.array(data).reshape(h, w, 3)
+    return arr.astype(np.uint8)
+
+
+class RawImageCache:
+    '''Holds undecoded-from-disk inputs in RAM so augmentation can stay per-access.
+
+    Pascal3D's augmentation is part of its camera solve: the flip rewrites the
+    viewpoint angles, the jittered bounding box feeds get_desired_camera, and the
+    rotation label falls out of the same computation. So a cached 224x224 crop is
+    already an augmented sample and cannot be re-augmented. This caches one step
+    earlier instead -- at the two file reads -- and lets __getitem__ run untouched,
+    which keeps the label maths byte-identical to upstream.
+
+    Pixels live in one flat uint8 tensor rather than a list of arrays: a list of
+    ~10k numpy objects gets copied into every forked DataLoader worker as CPython
+    touches their refcounts, while a single tensor buffer does not.
+    '''
+
+    def __init__(self, img_paths, annot_paths=(), workers: int = 8):
+        self._index = {}
+        self._annot = {}
+
+        sizes = []
+        for path in tqdm(img_paths, desc="Scanning image sizes"):
+            with Image.open(path) as im:      # lazy: reads the header only
+                w, h = im.size
+            sizes.append((h, w))
+
+        offset = 0
+        for path, (h, w) in zip(img_paths, sizes):
+            self._index[path] = (offset, h, w)
+            offset += h * w * 3
+        self._buf = torch.empty(offset, dtype=torch.uint8)
+
+        def _fill(path):
+            off, h, w = self._index[path]
+            arr = _decode_like_upstream(path)
+            self._buf[off:off + h * w * 3] = torch.from_numpy(np.ascontiguousarray(arr).reshape(-1))
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            list(tqdm(pool.map(_fill, img_paths), total=len(img_paths), desc="Caching images"))
+
+        for path in tqdm(list(annot_paths), desc="Caching annotations"):
+            with open(path, "rb") as f:
+                self._annot[path] = f.read()
+
+    @classmethod
+    def for_dataset(cls, dataset, workers: int = 8):
+        real = dataset.real_dataset
+        img_paths = list(real.img_paths)
+        if getattr(dataset, "use_synth", False):
+            img_paths.extend(dataset.synth_dataset.files)
+        return cls(img_paths, real.annot_paths, workers=workers)
+
+    @property
+    def nbytes(self):
+        return self._buf.nelement() + sum(len(v) for v in self._annot.values())
+
+    def image(self, path):
+        hit = self._index.get(path)
+        if hit is None:
+            return None
+        off, h, w = hit
+        return self._buf[off:off + h * w * 3].numpy().reshape(h, w, 3)
+
+    def annotation(self, path):
+        raw = self._annot.get(path)
+        return None if raw is None else io.BytesIO(raw)
+
+    def install(self):
+        '''Serve pascal_dataset's two file reads from this cache.
+
+        Patching the module's Image/loadmat names, rather than reimplementing
+        __getitem__, is what guarantees the rotation labels stay identical.
+        Paths this cache does not hold fall through to disk, so the validation
+        split is unaffected.
+        '''
+        module = pascal_dataset_module
+
+        if not getattr(module, "_raw_cache_installed", False):
+            real_image, real_loadmat = module.Image, module.loadmat
+
+            class _ImageProxy:
+                def __getattr__(self, name):
+                    return getattr(real_image, name)
+
+                @staticmethod
+                def open(f):
+                    cache = getattr(module, "_raw_cache", None)
+                    # Pascal3DReal passes a file object, Pascal3DSynth a path.
+                    arr = cache.image(getattr(f, "name", f)) if cache is not None else None
+                    return _CachedPIL(arr) if arr is not None else real_image.open(f)
+
+            def _loadmat_proxy(path, *args, **kwargs):
+                cache = getattr(module, "_raw_cache", None)
+                buf = cache.annotation(path) if cache is not None else None
+                return real_loadmat(path if buf is None else buf, *args, **kwargs)
+
+            module.Image = _ImageProxy()
+            module.loadmat = _loadmat_proxy
+            module._raw_cache_installed = True
+
+        module._raw_cache = self
+        return self
 
 
 class InMemoryDataset(Dataset):
@@ -182,19 +321,31 @@ def create_dataloaders(config):
                 "--use_synth found no RenderForCNN images under "
                 f"{config.path_to_datasets}/syn_images_cropped_bkg_overlaid/<synset>/*/*.png"
             )
-        if config.use_warp and config.ram_memory and config.cache_draws == 1:
-            print("WARNING: --ram_memory caches one draw per image, which freezes the "
-                  "augmentation --use_warp just enabled. Pass --cache_draws > 1.")
-
         num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(train, build_workers=num_builder,
-                                        use_multiprocessing=config.multiprocessing,
-                                        n_draws=config.cache_draws) if config.ram_memory else train
+
+        if config.ram_memory and config.raw_cache:
+            # Cache the file reads and let Pascal3D augment on every access, so
+            # augmentation is unlimited rather than a fixed pool of draws.
+            cache = RawImageCache.for_dataset(train, workers=2 * num_builder).install()
+            print(f"Raw cache: {cache.nbytes / 2**30:.2f} GiB held in RAM, "
+                  f"augmentation runs per access")
+            train_dataset = train
+        elif config.ram_memory:
+            if config.use_warp and config.cache_draws == 1:
+                print("WARNING: --ram_memory caches one draw per image, which freezes the "
+                      "augmentation --use_warp just enabled. Pass --cache_draws > 1 or "
+                      "--raw_cache.")
+            train_dataset = InMemoryDataset(train, build_workers=num_builder,
+                                            use_multiprocessing=config.multiprocessing,
+                                            n_draws=config.cache_draws)
+        else:
+            train_dataset = train
         # Validation stays deterministic: one draw, no augmentation.
         val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
-    num_workers = 2 if config.ram_memory else 4
+    # The raw cache moves the warp into the workers, so it wants the full count.
+    num_workers = 2 if (config.ram_memory and not config.raw_cache) else 4
     persistent_workers = (num_workers > 0)
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=True,persistent_workers=persistent_workers)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=True, shuffle=False,persistent_workers=persistent_workers)
