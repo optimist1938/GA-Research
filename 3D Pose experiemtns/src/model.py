@@ -8,6 +8,8 @@ from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProduct
 from src.image_encoders import build_encoder, is_resnet
 from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
 from src.flow_matching_utils import geodesic_interpolate, geodesic_distance, relative_log, rotor_multiply, exp_map
+import src.matrix_fisher as matrix_fisher
+import src.fisher_resnet as fisher_resnet
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
 from e3nn import o3
 from typing import List,Union
@@ -285,23 +287,59 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet"):
+                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet",
+                 pretrain_fisher: str = None):
         super().__init__()
         self.algebra = algebra
-        self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
-                                           pretrained_backbone=pretrained_backbone,
-                                           encoder_type=encoder_type)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
-        self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
+        mv_dim = int(2**algebra.dim)
+
+        # One shared backbone when pretrain_fisher is set: fisher_net.base feeds
+        # cond_mv (gradient from flow_matching_mse only) and, on a detached copy,
+        # fisher_net.head/class_embedding (gradient from fisher_nll only). Detaching
+        # there keeps head tracking base's drifting features every step, instead of
+        # staying calibrated to base's pretrained-time values.
+        self.fisher_net = None
+        self.adapter = None
+        if pretrain_fisher:
+            base = fisher_resnet.resnet101()
+            self.fisher_net = fisher_resnet.ResnetHead(base, n_classes=13, embedding_dim=32,
+                                                        num_hidden_nodes=512, n_out=9)
+            state_dict = torch.load(pretrain_fisher, map_location="cpu")
+            self.fisher_net.load_state_dict(state_dict)
+
+            self._fisher_n_mv = 8
+            self.fisher_proj = nn.Linear(base.output_size, self._fisher_n_mv * mv_dim)
+            cond_in_features = self._fisher_n_mv
+        else:
+            self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
+                                               pretrained_backbone=pretrained_backbone,
+                                               encoder_type=encoder_type)
+            cond_in_features = self.adapter.n_mv
+
+        self.condition_head = TralaleroTralala(algebra, in_features=cond_in_features, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
         self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
 
         nn.init.zeros_(self.vector_field.out.weight)
         nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
-    def condition(self, x):
-        mv = self.adapter(x)
-        return self.condition_head(mv)
+    def _features(self, img, cls):
+        if self.fisher_net is None:
+            return self.condition_head(self.adapter(img)), None
+
+        latent = self.fisher_net.base(img)
+        mv = self.fisher_proj(latent).reshape(-1, self._fisher_n_mv, 2**self.algebra.dim)
+        cond_mv = self.condition_head(mv)
+
+        class_feat = self.fisher_net.class_embedding(cls.view(-1) + 1)
+        head_in = torch.cat([latent.detach(), class_feat], dim=1)
+        A = self.fisher_net.head(head_in).view(-1, 3, 3)
+        return cond_mv, A
+
+    def condition(self, x, cls=None):
+        cond_mv, _ = self._features(x, cls)
+        return cond_mv
 
     def velocity(self, rotor, t, cond_mv):
         rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
@@ -310,15 +348,19 @@ class CliffordFlow(nn.Module):
         out = self.vector_field(inp)[:, 0]
         return self.algebra.get_grade(out, 2)
 
-    def forward(self, x, rotor, t):
-        return self.velocity(rotor, t, self.condition(x))
+    def forward(self, x, rotor, t, cls=None):
+        return self.velocity(rotor, t, self.condition(x, cls))
 
-    def compute_loss(self, img, rot_gt, criterion=None):
+    def compute_loss(self, img, rot_gt, criterion=None, cls=None):
         # The backbone forward dominates the step cost while the vector field is
         # small, so drawing several (t, r0) pairs per image buys that many more
         # flow-matching samples for one shared conditioning pass.
-        cond_mv = self.condition(img)
+        cond_mv, A = self._features(img, cls)
         r1 = matrix_to_rotor(rot_gt)
+
+        fisher_loss = None
+        if A is not None:
+            fisher_loss = -matrix_fisher.log_prob(A, rot_gt).mean()
 
         k = self.n_time_samples
         if k > 1:
@@ -326,16 +368,24 @@ class CliffordFlow(nn.Module):
             # with image i.
             cond_mv = cond_mv.repeat_interleave(k, dim=0)
             r1 = r1.repeat_interleave(k, dim=0)
+            if A is not None:
+                A = A.repeat_interleave(k, dim=0)
 
         n = r1.shape[0]
-        r0 = random_rotor(n).to(r1.device)
+        if A is not None:
+            r0 = matrix_to_rotor(matrix_fisher.sample_batch(A))
+        else:
+            r0 = random_rotor(n).to(r1.device)
         t = torch.rand(n, device=r1.device)
 
         rt = geodesic_interpolate(r0, r1, t, self.algebra)
         target = relative_log(r0, r1, self.algebra)
         pred = self.velocity(rt, t, cond_mv)
         # Still a per-sample mean, so the value stays comparable across k.
-        return (pred - target).pow(2).sum(-1).mean()
+        loss = (pred - target).pow(2).sum(-1).mean()
+        if fisher_loss is not None:
+            loss = loss + fisher_loss
+        return loss
 
     def _medoid(self, rotors):
         '''Pick the sample closest to all the others, per batch item.
@@ -356,20 +406,25 @@ class CliffordFlow(nn.Module):
         return rotors[torch.arange(b, device=rotors.device), idx]
 
     @torch.no_grad()
-    def predict(self, x, *, n_samples: int = 1, steps: int = 20):
+    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = 20):
         b = x.shape[0]
         n_samples = max(1, int(n_samples))
 
-        cond_mv = self.condition(x)
+        cond_mv, A = self._features(x, cls)
         if n_samples > 1:
             cond_mv = cond_mv.repeat_interleave(n_samples, dim=0)
+            if A is not None:
+                A = A.repeat_interleave(n_samples, dim=0)
 
-        n = b * n_samples
-        rotor = random_rotor(n).to(x.device)
+        if A is not None:
+            rotor = matrix_to_rotor(matrix_fisher.sample_batch(A))
+        else:
+            n = b * n_samples
+            rotor = random_rotor(n).to(x.device)
 
         dt = 1.0 / steps
         for i in range(steps):
-            t = torch.full((n,), i * dt, device=x.device)
+            t = torch.full((rotor.shape[0],), i * dt, device=x.device)
             v = self.velocity(rotor, t, cond_mv)
             rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
 

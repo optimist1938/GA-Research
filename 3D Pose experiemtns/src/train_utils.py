@@ -78,6 +78,8 @@ def _compute_loss(model, data, criterion, config):
     if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
         # Important: avoid a duplicate forward pass before model.compute_loss(),
         # which can skew BatchNorm running statistics during training.
+        if clas is not None and "cls" in inspect.signature(model.compute_loss).parameters:
+            return model.compute_loss(img, targets, criterion, cls=clas)
         return model.compute_loss(img, targets, criterion)
 
     if clas is not None and _supports_class_argument(model.forward):

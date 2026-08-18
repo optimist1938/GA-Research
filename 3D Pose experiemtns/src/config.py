@@ -53,6 +53,11 @@ def create_argparser():
     # condition_head; a smaller grid shrinks condition_head's in_features (and thus
     # its param count) without touching anything else.
     parser.add_argument("--adapter_grid", type=int, default=16)
+    # Path to Liu et al. 2023's pretrained Pascal3D+ Matrix Fisher checkpoint
+    # (state_dict_119.pkl). When set, r0 is drawn from this per-image,
+    # per-category distribution instead of Haar-uniform, and its head is
+    # fine-tuned jointly via an auxiliary Fisher NLL term on the loss.
+    parser.add_argument("--pretrain_fisher", type=str, default=None)
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)
