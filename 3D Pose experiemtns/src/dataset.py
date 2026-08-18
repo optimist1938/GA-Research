@@ -30,11 +30,12 @@ class PascalSanityCheckDataset(Dataset):
         raise ValueError("List Index out of Range")
     
 
-def _collate_keep(img_key="img", rot_key="rot"):
+def _collate_keep(img_key="img", rot_key="rot", cls_key=None):
     def _c(batch):
         imgs = torch.stack([b[img_key] for b in batch], dim=0)
         rots = torch.stack([b[rot_key] for b in batch], dim=0)
-        return imgs, rots
+        clss = torch.stack([b[cls_key] for b in batch], dim=0) if cls_key is not None else None
+        return imgs, rots, clss
     return _c
 
 
@@ -44,14 +45,18 @@ def _iter_chunks(n, chunk_size):
 
 
 def _load_chunk(args):
-    base, indices, img_key, rot_key = args
+    base, indices, img_key, rot_key, cls_key = args
     imgs = []
     rots = []
+    clss = []
     for idx in indices:
         sample = base[idx]
         imgs.append(sample[img_key])
         rots.append(sample[rot_key])
-    return torch.stack(imgs, dim=0), torch.stack(rots, dim=0)
+        if cls_key is not None:
+            clss.append(sample[cls_key])
+    clss_t = torch.stack(clss, dim=0) if cls_key is not None else None
+    return torch.stack(imgs, dim=0), torch.stack(rots, dim=0), clss_t
 
 
 class _CachedPIL:
@@ -198,6 +203,7 @@ class InMemoryDataset(Dataset):
         store_uint8: bool = True,
         img_key: str = "img",
         rot_key: str = "rot",
+        cls_key: str = "cls",
         use_multiprocessing: bool = False,
         n_draws: int = 1,
     ):
@@ -212,6 +218,7 @@ class InMemoryDataset(Dataset):
         sample = base[0]
         img0 = sample[img_key]
         rot0 = sample[rot_key]
+        self.cls_key = cls_key if cls_key in sample else None
 
         c, h, w = img0.shape
         rot_shape = rot0.shape
@@ -223,6 +230,11 @@ class InMemoryDataset(Dataset):
             self.imgs = torch.empty((total, c, h, w), dtype=torch.float32)
 
         self.targets = torch.empty((total, *rot_shape), dtype=torch.float32)
+
+        self.clss = None
+        if self.cls_key is not None:
+            cls0 = sample[self.cls_key]
+            self.clss = torch.empty((total, *cls0.shape), dtype=cls0.dtype)
 
         self.store_uint8 = store_uint8
 
@@ -238,18 +250,18 @@ class InMemoryDataset(Dataset):
             self._fill(base, draw * n, build_workers, build_batch_size, use_multiprocessing, desc)
 
     def _fill(self, base, offset, build_workers, build_batch_size, use_multiprocessing, desc):
-        img_key, rot_key = self.img_key, self.rot_key
+        img_key, rot_key, cls_key = self.img_key, self.rot_key, self.cls_key
         store_uint8 = self.store_uint8
         n = self.n
 
         if use_multiprocessing:
             ctx = mp.get_context("spawn")
             chunks = _iter_chunks(n, build_batch_size)
-            tasks = ((base, chunk, img_key, rot_key) for chunk in chunks)
+            tasks = ((base, chunk, img_key, rot_key, cls_key) for chunk in chunks)
 
             write_pos = offset
             with ctx.Pool(processes=max(1, build_workers)) as pool:
-                for imgs, rots in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc=desc):
+                for imgs, rots, clss in tqdm(pool.imap(_load_chunk, tasks), total=(n + build_batch_size - 1) // build_batch_size, desc=desc):
                     bsz = imgs.shape[0]
 
                     if store_uint8:
@@ -262,6 +274,8 @@ class InMemoryDataset(Dataset):
                         self.imgs[write_pos:write_pos + bsz].copy_(imgs.to(torch.float32))
 
                     self.targets[write_pos:write_pos + bsz].copy_(rots.to(torch.float32))
+                    if self.clss is not None:
+                        self.clss[write_pos:write_pos + bsz].copy_(clss)
                     write_pos += bsz
         else:
             loader = DataLoader(
@@ -272,11 +286,11 @@ class InMemoryDataset(Dataset):
                 pin_memory=False,
                 persistent_workers=(build_workers > 0),
                 prefetch_factor=4 if build_workers > 0 else None,
-                collate_fn=_collate_keep(img_key, rot_key),
+                collate_fn=_collate_keep(img_key, rot_key, cls_key),
             )
 
             write_pos = offset
-            for imgs, rots in tqdm(loader, desc=desc):
+            for imgs, rots, clss in tqdm(loader, desc=desc):
                 bsz = imgs.shape[0]
 
                 if store_uint8:
@@ -289,6 +303,8 @@ class InMemoryDataset(Dataset):
                     self.imgs[write_pos:write_pos + bsz].copy_(imgs.to(torch.float32))
 
                 self.targets[write_pos:write_pos + bsz].copy_(rots.to(torch.float32))
+                if self.clss is not None:
+                    self.clss[write_pos:write_pos + bsz].copy_(clss)
                 write_pos += bsz
 
     def __len__(self):
@@ -303,6 +319,8 @@ class InMemoryDataset(Dataset):
         if self.store_uint8:
             x = x.to(torch.float32) / 255.0
         y = self.targets[idx]
+        if self.clss is not None:
+            return {"img": x, "rot": y, "cls": self.clss[idx]}
         return {"img": x, "rot": y}
 
 
