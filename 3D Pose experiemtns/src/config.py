@@ -38,6 +38,8 @@ def create_argparser():
     parser.add_argument("--use_warp", action=argparse.BooleanOptionalAction, default=False)
     # RenderForCNN synthetic images; needs a separate download.
     parser.add_argument("--use_synth", action=argparse.BooleanOptionalAction, default=False)
+    # RenderForCNN ships far more renders than fit in RAM; 0 keeps all of them.
+    parser.add_argument("--max_synth", type=int, default=0)
     # Independent augmented passes to cache, so --ram_memory does not freeze --use_warp.
     parser.add_argument("--cache_draws", type=int, default=1)
     # Cache the file reads instead of warped crops, keeping augmentation per-access.

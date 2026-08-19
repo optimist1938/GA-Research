@@ -321,6 +321,18 @@ def create_dataloaders(config):
                 "--use_synth found no RenderForCNN images under "
                 f"{config.path_to_datasets}/syn_images_cropped_bkg_overlaid/<synset>/*/*.png"
             )
+        if config.use_synth:
+            available = len(train.synth_dataset.files)
+            if 0 < config.max_synth < available:
+                # Bound the pool before the cache sees it. Each epoch only draws
+                # 3 * len(real) synthetic samples, so a capped pool still gives
+                # every draw a fresh image.
+                rng = np.random.default_rng(0)
+                keep = sorted(rng.choice(available, size=config.max_synth, replace=False))
+                train.synth_dataset.files = [train.synth_dataset.files[i] for i in keep]
+            print(f"Synthetic pool: {len(train.synth_dataset.files)} of {available} renders, "
+                  f"{3 * len(train.real_dataset)} drawn per epoch")
+
         num_builder = 4 if config.platform == "kaggle" else 2
 
         if config.ram_memory and config.raw_cache:
