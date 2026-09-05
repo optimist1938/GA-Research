@@ -5,7 +5,7 @@ import torch.nn as nn
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
-from src.image_encoders import build_encoder, is_resnet
+from src.image_encoders import build_encoder, is_resnet, _IMAGENET_MEAN, _IMAGENET_STD
 from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
 from src.flow_matching_utils import geodesic_interpolate, geodesic_distance, relative_log, rotor_multiply, exp_map
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
@@ -443,3 +443,102 @@ class MLPBaseline(nn.Module):
         x = self.linear_head(x)
         x = x.reshape(x.shape[0], 3, 3)
         return x
+
+
+class I2SReal(nn.Module):
+    """The published Image2Sphere model, adapted to this repo's training harness.
+
+    `I2S` above is not Image2Sphere: it average-pools the feature map before its
+    GA head, discarding the spatial structure that the orthographic S2 projection
+    exists to exploit. This wraps the real thing from `image2sphere.predictor` so
+    a baseline can be trained under the same dataloader, schedule, and metric as
+    the models it is meant to be compared against.
+
+    Three seams need adapting:
+      * upstream `compute_loss(img, cls, rot)` takes the class label second and
+        returns `(loss, acc)`; the harness calls `compute_loss(img, rot, criterion)`
+        and wants a scalar back.
+      * upstream `forward` always takes a class tensor, even though
+        `include_class_label` is off for PASCAL3D+. A zero tensor stands in, and
+        `InMemoryDataset` drops `cls` anyway.
+      * upstream `predict` evaluates on CPU and returns CPU rotations, because
+        `eval_wigners` is a plain attribute that never follows the model to GPU.
+        The harness compares against a CUDA ground truth, so the grid is held as
+        a buffer here and the argmax runs on-device.
+    """
+
+    def __init__(
+        self,
+        encoder_type: str = "resnet101",
+        pretrained_backbone: bool = True,
+        lmax: int = 6,
+        rec_level: int = 3,
+        eval_rec_level: int = 3,
+        num_classes: int = 12,
+        sphere_fdim: int = 512,
+        normalize_input: bool = True,
+    ):
+        super().__init__()
+        from image2sphere.predictor import I2S as UpstreamI2S
+
+        if not is_resnet(encoder_type):
+            raise ValueError(
+                f"I2SReal expects a resnet backbone, got {encoder_type!r}"
+            )
+        size = 101 if encoder_type == "resnet101" else 50
+        encoder = f"resnet{size}" + ("_pretrained" if pretrained_backbone else "")
+
+        self.net = UpstreamI2S(
+            num_classes=num_classes,
+            encoder=encoder,
+            sphere_fdim=sphere_fdim,
+            lmax=lmax,
+            train_grid_rec_level=rec_level,
+            train_grid_mode="healpix",
+            eval_grid_rec_level=eval_rec_level,
+            eval_use_gradient_ascent=False,
+            include_class_label=False,
+        )
+
+        # Upstream leaves these as plain attributes so its own predict() can run
+        # the rec_level-5 matmul on CPU. Re-registering them as buffers keeps
+        # them beside the model instead.
+        eval_wigners = self.net.eval_wigners
+        eval_rotmats = self.net.eval_rotmats
+        del self.net.eval_wigners
+        del self.net.eval_rotmats
+        self.net.register_buffer("eval_wigners", eval_wigners, persistent=False)
+        self.net.register_buffer("eval_rotmats", eval_rotmats, persistent=False)
+
+        # Pascal3D hands over [0, 1] images. Upstream feeds those straight to an
+        # ImageNet-pretrained ResNet, but every other pretrained path in this repo
+        # normalizes first (see ImageNetNormalized), so the baseline is fed the
+        # same way as the models it is being compared against.
+        self.normalize_input = normalize_input
+        self.register_buffer("mean", torch.tensor(_IMAGENET_MEAN).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor(_IMAGENET_STD).view(1, 3, 1, 1))
+
+    def _prep(self, img: torch.Tensor) -> torch.Tensor:
+        return (img - self.mean) / self.std if self.normalize_input else img
+
+    def _cls(self, img: torch.Tensor) -> torch.Tensor:
+        # include_class_label is off, so this is only shape-compatibility.
+        return torch.zeros(img.shape[0], 1, dtype=torch.long, device=img.device)
+
+    def forward(self, img: torch.Tensor) -> torch.Tensor:
+        '''Returns the SO(3) Fourier coefficients, matching upstream's forward.'''
+        return self.net(self._prep(img), self._cls(img))
+
+    def compute_loss(self, img: torch.Tensor, rot_gt: torch.Tensor, criterion=None) -> torch.Tensor:
+        # criterion is ignored: upstream builds its own CrossEntropyLoss over the
+        # training grid, and reproducing I2S means keeping that. So --loss and
+        # --label_smoothing have no effect on this model.
+        loss, _acc = self.net.compute_loss(self._prep(img), self._cls(img), rot_gt)
+        return loss
+
+    @torch.no_grad()
+    def predict(self, img: torch.Tensor) -> torch.Tensor:
+        fourier = self.forward(img)
+        probs = torch.matmul(fourier, self.net.eval_wigners).squeeze(1)
+        idx = probs.max(dim=1)[1]
+        return self.net.eval_rotmats[idx].to(img.device)

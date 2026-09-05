@@ -30,3 +30,8 @@ transformers = "^4.38.0"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "kaggle (>=2.2.4,<3.0.0)"
+]

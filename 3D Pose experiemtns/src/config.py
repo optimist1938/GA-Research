@@ -17,7 +17,7 @@ def create_argparser():
     parser.add_argument("--multiprocessing", type=bool, default=False)
 
     parser.add_argument("--model", type=str, default="tralalero",
-                        choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])
+                        choices=["tralalero", "mlp", "i2s", "i2s_real", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])
     parser.add_argument("--loss", type=str, default="mse",
                         choices=["mse", "prob"])
     # "resnet" is an alias for resnet50, kept as the default for continuity.
@@ -31,6 +31,14 @@ def create_argparser():
     parser.add_argument("--ga_pool_hw", type=int, nargs=2, default=[28, 28])
     parser.add_argument("--hidden_dim", type=int, nargs="+", default=[32])
     parser.add_argument("--temperature", type=float, default=1.0)
+    # i2s_real only: the grid predictions are read off at eval time. Upstream
+    # defaults to 5, but that is a 455 x 2.36M wigner matrix (4.3 GB) and the
+    # harness evaluates every epoch, so this defaults to rec_level instead --
+    # the same grid the other models here predict on.
+    parser.add_argument("--i2s_eval_rec_level", type=int, default=3)
+    # i2s_real only: upstream feeds [0, 1] images straight to an ImageNet
+    # backbone. On by default here to match the rest of this repo.
+    parser.add_argument("--i2s_normalize", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
     # Pascal3D's own augmentation (flip, up-direction jitter, bbox jitter), which

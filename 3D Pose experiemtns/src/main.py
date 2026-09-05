@@ -6,7 +6,7 @@ from clifford.algebra.cliffordalgebra import CliffordAlgebra
 
 from src.config import create_argparser
 from src.dataset import create_dataloaders
-from src.model import TralaleroCompetitor, MLPBaseline, I2S, GA_I2S, CliffordFlow
+from src.model import TralaleroCompetitor, MLPBaseline, I2S, I2SReal, GA_I2S, CliffordFlow
 # from src.img_to_pcd_stuff import I2P, DummyNet
 from src.img_to_pcd_2 import I2P, I2P_IPDF
 from src.train_utils import train, form_checkpoint, get_available_device,load_checkpoint
@@ -48,6 +48,15 @@ def instantiate(config):
             temperature=config.temperature,
             encoder_type=config.encoder,
             pretrained_backbone=config.pretrained_backbone,
+        )
+    elif config.model == "i2s_real":
+        model = I2SReal(
+            encoder_type=config.encoder,
+            pretrained_backbone=config.pretrained_backbone,
+            lmax=config.lmax,
+            rec_level=config.rec_level,
+            eval_rec_level=config.i2s_eval_rec_level,
+            normalize_input=config.i2s_normalize,
         )
     elif config.model == "ga_i2s":
         model = GA_I2S(
