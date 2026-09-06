@@ -153,12 +153,86 @@ class ImageEncoder(nn.Module):
 
 _RESNET_SIZES = {"resnet": 50, "resnet50": 50, "resnet101": 101}
 
+DEPTH_ANYTHING_DEFAULT = "depth-anything/Depth-Anything-V2-Base-hf"
+
 
 def is_resnet(encoder_type: str) -> bool:
   return encoder_type in _RESNET_SIZES
 
 
-def build_encoder(encoder_type: str, pretrained: bool = False):
+def is_dense_backbone(encoder_type: str) -> bool:
+  '''Backbones that emit a deep, low-resolution feature map.
+
+  The conv adapter in ImageToMultivectors and I2S's S2 projector are both sized
+  from a large channel count, so they work with any of these. The GA encoders are
+  the exception: they emit a handful of channels at full image resolution.
+  '''
+  return is_resnet(encoder_type) or encoder_type == "depth_anything"
+
+
+class DepthAnythingEncoder(nn.Module):
+  '''Depth Anything V2's DINOv2 backbone as a dense feature extractor.
+
+  Only the backbone is kept; the depth neck and head are discarded, so this is a
+  feature map rather than a depth prediction. DINOv2 returns patch tokens, not a
+  spatial map, so they are reshaped back onto the patch grid: at 224px with
+  patch 14 that is 16x16 (versus a ResNet's 7x7), which the downstream S2
+  projector and conv adapter both handle since they size themselves from the
+  channel count and pool over the spatial dims.
+  '''
+
+  def __init__(self, model_id: str = DEPTH_ANYTHING_DEFAULT, pretrained: bool = True):
+    super().__init__()
+    from transformers import AutoConfig, DepthAnythingForDepthEstimation
+
+    config = AutoConfig.from_pretrained(model_id)
+    if pretrained:
+      full = DepthAnythingForDepthEstimation.from_pretrained(model_id)
+    else:
+      full = DepthAnythingForDepthEstimation(config)
+
+    self.backbone = full.backbone
+    self.patch_size = int(config.backbone_config.patch_size)
+    channels = int(config.backbone_config.hidden_size)
+    grid = 224 // self.patch_size
+    self.output_shape = (channels, grid, grid)
+
+  def forward(self, x):
+    feats = self.backbone(x).feature_maps[-1]
+
+    if feats.dim() == 4:
+      # Some transformers versions reshape for us (config.reshape_hidden_states).
+      return feats
+
+    b, n, c = feats.shape
+    gh = x.shape[-2] // self.patch_size
+    gw = x.shape[-1] // self.patch_size
+    # Drop CLS (and any register tokens) by taking the trailing patch tokens.
+    feats = feats[:, n - gh * gw:, :]
+    return feats.transpose(1, 2).reshape(b, c, gh, gw)
+
+
+def freeze_encoder(module):
+  '''Freeze a backbone and pin it to eval mode.
+
+  requires_grad_(False) alone is not enough: the harness calls model.train() every
+  epoch, which would put a frozen ResNet's BatchNorm back into updating its running
+  statistics. Callers therefore also need to re-assert eval() from their own
+  train(), which the models here do.
+  '''
+  for p in module.parameters():
+    p.requires_grad_(False)
+  module.eval()
+  return module
+
+
+def build_encoder(encoder_type: str, pretrained: bool = False,
+                  depth_anything_model: str = DEPTH_ANYTHING_DEFAULT):
+  if encoder_type == "depth_anything":
+    encoder = DepthAnythingEncoder(depth_anything_model, pretrained=pretrained)
+    # Depth Anything's own preprocessor uses the ImageNet statistics, same as the
+    # torchvision weights, so the wrapper applies here too.
+    return ImageNetNormalized(encoder) if pretrained else encoder
   if encoder_type in _RESNET_SIZES:
     from image2sphere.models import ResNet
     encoder = ResNet(size=_RESNET_SIZES[encoder_type], pretrained=pretrained)

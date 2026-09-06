@@ -22,7 +22,7 @@ def create_argparser():
                         choices=["mse", "prob"])
     # "resnet" is an alias for resnet50, kept as the default for continuity.
     parser.add_argument("--encoder", type=str, default="resnet",
-                        choices=["resnet", "resnet50", "resnet101", "ga", "ga_canonical"])
+                        choices=["resnet", "resnet50", "resnet101", "depth_anything", "ga", "ga_canonical"])
 
     # I2S
     parser.add_argument("--lmax", type=int, default=6)
@@ -36,6 +36,13 @@ def create_argparser():
     # harness evaluates every epoch, so this defaults to rec_level instead --
     # the same grid the other models here predict on.
     parser.add_argument("--i2s_eval_rec_level", type=int, default=3)
+    # Which Depth Anything checkpoint --encoder=depth_anything loads.
+    parser.add_argument("--depth_anything_model", type=str,
+                        default="depth-anything/Depth-Anything-V2-Base-hf")
+    # Freeze the pretrained backbone and train only the head. Distinct from
+    # --freeze_backbone, which only I2P_IPDF reads and which defaults to True;
+    # this one defaults to False so existing commands are unaffected.
+    parser.add_argument("--freeze_encoder", action=argparse.BooleanOptionalAction, default=False)
     # i2s_real only: upstream feeds [0, 1] images straight to an ImageNet
     # backbone. On by default here to match the rest of this repo.
     parser.add_argument("--i2s_normalize", action=argparse.BooleanOptionalAction, default=True)

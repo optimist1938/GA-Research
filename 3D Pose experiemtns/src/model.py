@@ -5,7 +5,8 @@ import torch.nn as nn
 from clifford.models.modules.gp import SteerableGeometricProductLayer
 from clifford.models.modules.mvsilu import MVSiLU
 from clifford.models.modules.fcgp import FullyConnectedSteerableGeometricProductLayer
-from src.image_encoders import build_encoder, is_resnet, _IMAGENET_MEAN, _IMAGENET_STD
+from src.image_encoders import (build_encoder, is_resnet, is_dense_backbone, freeze_encoder,
+                                DEPTH_ANYTHING_DEFAULT, _IMAGENET_MEAN, _IMAGENET_STD)
 from src.rotor_utils import matrix_to_rotor, rotor_to_matrix, random_rotor, embed_rotor
 from src.flow_matching_utils import geodesic_interpolate, geodesic_distance, relative_log, rotor_multiply, exp_map
 from image2sphere.so3_utils import so3_healpix_grid, flat_wigner, nearest_rotmat
@@ -255,16 +256,22 @@ def _ga_to_canonical_mv(mv_grid, mv_dim):
 class ImageToMultivectors(nn.Module):
     # ResNet -> HeatMap -> ConvAdapter -> n multivectors (grid x grid)
     def __init__(self, algebra, grid=16, pretrained_backbone: bool = False,
-                 encoder_type: str = "resnet"):
+                 encoder_type: str = "resnet",
+                 depth_anything_model: str = DEPTH_ANYTHING_DEFAULT,
+                 freeze_backbone: bool = False):
         super().__init__()
-        if not is_resnet(encoder_type):
-            # The conv adapter is sized from a deep CNN's channel count; the GA
-            # encoders emit a handful of channels at full resolution instead.
+        if not is_dense_backbone(encoder_type):
+            # The conv adapter is sized from a deep backbone's channel count; the
+            # GA encoders emit a handful of channels at full resolution instead.
             raise ValueError(
-                f"ImageToMultivectors expects a resnet backbone, got {encoder_type!r}"
+                f"ImageToMultivectors expects a dense backbone, got {encoder_type!r}"
             )
         mv_dim = 2**algebra.dim
-        self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone)
+        self.backbone = build_encoder(encoder_type, pretrained=pretrained_backbone,
+                                      depth_anything_model=depth_anything_model)
+        self.frozen_backbone = bool(freeze_backbone)
+        if self.frozen_backbone:
+            freeze_encoder(self.backbone)
         backbone_channels = self.backbone.output_shape[0]
 
         self.conv_adapter = nn.Sequential(
@@ -277,20 +284,34 @@ class ImageToMultivectors(nn.Module):
         )
         self.n_mv = grid * grid
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.frozen_backbone:
+            self.backbone.eval()
+        return self
+
     def forward(self, x):
-        fmap = self.backbone(x)
+        if self.frozen_backbone:
+            with torch.no_grad():
+                fmap = self.backbone(x)
+        else:
+            fmap = self.backbone(x)
         adapted = self.conv_adapter(fmap)
         return adapted.flatten(2).transpose(1, 2)
 
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet"):
+                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet",
+                 depth_anything_model: str = DEPTH_ANYTHING_DEFAULT,
+                 freeze_backbone: bool = False):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
                                            pretrained_backbone=pretrained_backbone,
-                                           encoder_type=encoder_type)
+                                           encoder_type=encoder_type,
+                                           depth_anything_model=depth_anything_model,
+                                           freeze_backbone=freeze_backbone)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
@@ -477,28 +498,63 @@ class I2SReal(nn.Module):
         num_classes: int = 12,
         sphere_fdim: int = 512,
         normalize_input: bool = True,
+        depth_anything_model: str = DEPTH_ANYTHING_DEFAULT,
+        freeze_backbone: bool = False,
     ):
         super().__init__()
+        import image2sphere.predictor as _predictor
         from image2sphere.predictor import I2S as UpstreamI2S
 
-        if not is_resnet(encoder_type):
+        if not is_dense_backbone(encoder_type):
             raise ValueError(
-                f"I2SReal expects a resnet backbone, got {encoder_type!r}"
+                f"I2SReal expects a dense backbone, got {encoder_type!r}"
             )
-        size = 101 if encoder_type == "resnet101" else 50
-        encoder = f"resnet{size}" + ("_pretrained" if pretrained_backbone else "")
 
-        self.net = UpstreamI2S(
-            num_classes=num_classes,
-            encoder=encoder,
-            sphere_fdim=sphere_fdim,
-            lmax=lmax,
-            train_grid_rec_level=rec_level,
-            train_grid_mode="healpix",
-            eval_grid_rec_level=eval_rec_level,
-            eval_use_gradient_ascent=False,
-            include_class_label=False,
-        )
+        injected = None
+        if encoder_type == "depth_anything":
+            # BaseSO3Predictor builds its own ResNet from a string, so a non-resnet
+            # backbone has to be swapped in at that call. build_encoder already
+            # wraps it in ImageNetNormalized, so _prep must not normalize again.
+            injected = build_encoder(encoder_type, pretrained=pretrained_backbone,
+                                     depth_anything_model=depth_anything_model)
+            # build_encoder only wraps in ImageNetNormalized when pretrained.
+            normalize_input = not pretrained_backbone
+            # The string is unused once ResNet is patched, but BaseSO3Predictor
+            # still regex-parses a digit out of it before the call.
+            encoder = "resnet50_pretrained"
+        else:
+            size = 101 if encoder_type == "resnet101" else 50
+            encoder = f"resnet{size}" + ("_pretrained" if pretrained_backbone else "")
+
+        original_resnet = _predictor.ResNet
+        if injected is not None:
+            _predictor.ResNet = lambda *args, **kwargs: injected
+        try:
+            self.net = UpstreamI2S(
+                num_classes=num_classes,
+                encoder=encoder,
+                sphere_fdim=sphere_fdim,
+                lmax=lmax,
+                train_grid_rec_level=rec_level,
+                train_grid_mode="healpix",
+                eval_grid_rec_level=eval_rec_level,
+                eval_use_gradient_ascent=False,
+                include_class_label=False,
+            )
+        finally:
+            _predictor.ResNet = original_resnet
+
+        self.frozen_backbone = bool(freeze_backbone)
+        if self.frozen_backbone:
+            if not pretrained_backbone:
+                raise ValueError(
+                    "freeze_backbone with a randomly initialised encoder trains a "
+                    "head on noise; pass pretrained_backbone as well."
+                )
+            # The image never requires grad and neither do these parameters, so the
+            # encoder's output detaches on its own -- no autograd graph is built
+            # through it and no explicit no_grad is needed.
+            freeze_encoder(self.net.encoder)
 
         # Upstream leaves these as plain attributes so its own predict() can run
         # the rec_level-5 matmul on CPU. Re-registering them as buffers keeps
@@ -517,6 +573,12 @@ class I2SReal(nn.Module):
         self.normalize_input = normalize_input
         self.register_buffer("mean", torch.tensor(_IMAGENET_MEAN).view(1, 3, 1, 1))
         self.register_buffer("std", torch.tensor(_IMAGENET_STD).view(1, 3, 1, 1))
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if getattr(self, "frozen_backbone", False):
+            self.net.encoder.eval()
+        return self
 
     def _prep(self, img: torch.Tensor) -> torch.Tensor:
         return (img - self.mean) / self.std if self.normalize_input else img

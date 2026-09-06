@@ -57,6 +57,8 @@ def instantiate(config):
             rec_level=config.rec_level,
             eval_rec_level=config.i2s_eval_rec_level,
             normalize_input=config.i2s_normalize,
+            depth_anything_model=config.depth_anything_model,
+            freeze_backbone=config.freeze_encoder,
         )
     elif config.model == "ga_i2s":
         model = GA_I2S(
@@ -92,6 +94,8 @@ def instantiate(config):
             n_time_samples=config.n_time_samples,
             adapter_grid=config.adapter_grid,
             encoder_type=config.encoder,
+            depth_anything_model=config.depth_anything_model,
+            freeze_backbone=config.freeze_encoder,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
