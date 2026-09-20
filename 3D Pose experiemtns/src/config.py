@@ -44,6 +44,9 @@ def create_argparser():
     # condition_head; a smaller grid shrinks condition_head's in_features (and thus
     # its param count) without touching anything else.
     parser.add_argument("--adapter_grid", type=int, default=16)
+    # "mlp" swaps condition_head and vector_field for parameter-matched plain MLPs
+    # (head ablation); everything else in the flow stays the same.
+    parser.add_argument("--head_type", type=str, default="tralalero", choices=["tralalero", "mlp"])
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)

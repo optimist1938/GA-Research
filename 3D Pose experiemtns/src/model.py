@@ -284,21 +284,75 @@ class ImageToMultivectors(nn.Module):
         return adapted.flatten(2).transpose(1, 2)
 
 
+def _n_params(module):
+    return sum(p.numel() for p in module.parameters())
+
+
+class MultivectorMLP(nn.Module):
+    '''Plain MLP standing in for TralaleroTralala in the head ablation.
+
+    Takes and returns (B, n_mv, mv_dim) like the geometric-algebra head, so it is
+    a drop-in swap that flattens the multivectors and ignores their algebraic
+    structure. One hidden layer per entry of hidden_dim, all of a single width
+    chosen so the total parameter count lands as close to target_params as
+    possible.
+    '''
+
+    def __init__(self, in_mv: int, out_mv: int, mv_dim: int, n_hidden: int, target_params: int):
+        super().__init__()
+        self.out_mv, self.mv_dim = out_mv, mv_dim
+        in_f, out_f = in_mv * mv_dim, out_mv * mv_dim
+
+        def dims(width):
+            return [in_f] + [width] * n_hidden + [out_f]
+
+        def count(width):
+            d = dims(width)
+            return sum(a * b + b for a, b in zip(d[:-1], d[1:]))
+
+        # Counted analytically: building a module per candidate width is slow.
+        self.width = min(range(1, 8192), key=lambda w: abs(count(w) - target_params))
+        d = dims(self.width)
+        layers = []
+        for a, b in zip(d[:-1], d[1:]):
+            layers += [nn.Linear(a, b), nn.SiLU()]
+        self.net = nn.Sequential(*layers[:-1])
+
+    def forward(self, x):
+        return self.net(x.flatten(1)).view(x.shape[0], self.out_mv, self.mv_dim)
+
+
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet"):
+                 n_time_samples: int = 1, adapter_grid: int = 16, encoder_type: str = "resnet",
+                 head_type: str = "tralalero"):
         super().__init__()
+        if head_type not in ("tralalero", "mlp"):
+            raise ValueError(f"head_type must be 'tralalero' or 'mlp', got {head_type!r}")
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
                                            pretrained_backbone=pretrained_backbone,
                                            encoder_type=encoder_type)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
+        self.head_type = head_type
         self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
         self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
 
-        nn.init.zeros_(self.vector_field.out.weight)
-        nn.init.zeros_(self.vector_field.out.linear_left.weight)
+        if head_type == "mlp":
+            # Ablation: same pipeline, heads swapped for plain MLPs sized to the
+            # GA heads' parameter counts. Everything else (rotor/time embedding,
+            # grade-2 read-out, loss, sampler) is untouched.
+            mv_dim = 2**algebra.dim
+            n_hidden = len(hidden_dim) if not isinstance(hidden_dim, int) else 1
+            ga_cond, ga_field = _n_params(self.condition_head), _n_params(self.vector_field)
+            self.condition_head = MultivectorMLP(self.adapter.n_mv, self.n_cond_mv, mv_dim, n_hidden, ga_cond)
+            self.vector_field = MultivectorMLP(2 + self.n_cond_mv, 1, mv_dim, n_hidden, ga_field)
+            nn.init.zeros_(self.vector_field.net[-1].weight)
+            nn.init.zeros_(self.vector_field.net[-1].bias)
+        else:
+            nn.init.zeros_(self.vector_field.out.weight)
+            nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
     def condition(self, x):
         mv = self.adapter(x)

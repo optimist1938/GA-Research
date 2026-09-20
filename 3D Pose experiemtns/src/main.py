@@ -83,6 +83,7 @@ def instantiate(config):
             n_time_samples=config.n_time_samples,
             adapter_grid=config.adapter_grid,
             encoder_type=config.encoder,
+            head_type=config.head_type,
         )
     elif config.model == "mlp_flow":
         model = MLPFlow(
@@ -97,6 +98,10 @@ def instantiate(config):
     config.device = get_available_device()
     
     model.to(config.device)
+    print(f"Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    for name in ("condition_head", "vector_field"):
+        if hasattr(model, name):
+            print(f"  {name}: {sum(p.numel() for p in getattr(model, name).parameters()):,}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     warmup_epochs = config.warmup_epochs
