@@ -73,16 +73,26 @@ class _CachedPIL:
 
 
 def _decode_like_upstream(path):
-    '''Decode a file the way Pascal3DReal.__getitem__ does, so pixels match bit for bit.'''
-    with open(path, "rb") as f:
-        img_PIL = Image.open(f)
-        img_PIL.convert("RGB")
-        data = img_PIL.getdata()
-        w, h = img_PIL.size
-        if isinstance(data[0], int) or len(data[0]) == h * w:
-            arr = np.array(data).reshape(h, w).reshape(h, w, 1).repeat(3, 2)
-        else:
-            arr = np.array(data).reshape(h, w, 3)
+    '''Decode a file the way Pascal3DReal.__getitem__ does, so pixels match bit for bit.
+
+    Upstream assembles the array from getdata(), which hands numpy one Python
+    tuple per pixel: ~65 ms on a Pascal3D-sized JPEG against ~4 ms for asarray
+    on the same file, and all of it under the GIL, so the fill pool below could
+    never scale past one core. asarray reads the very same buffer in C.
+
+    The branch reproduces what upstream actually sees rather than what it looks
+    like it asks for: it discards the return of convert("RGB"), so getdata()
+    runs on the file's own mode and a single-band image -- a palette one
+    included -- comes out as its raw band repeated three times, never a palette
+    lookup. Only 1- and 3-band files decode at all, here or upstream.
+    '''
+    with Image.open(path) as img_PIL:
+        if img_PIL.mode == "1":
+            # getdata() reports bilevel pixels as 0/255, the buffer holds 0/1.
+            img_PIL = img_PIL.convert("L")
+        arr = np.asarray(img_PIL)
+        if arr.ndim == 2:
+            arr = arr[:, :, None].repeat(3, 2)
     return arr.astype(np.uint8)
 
 
