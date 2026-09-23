@@ -82,6 +82,7 @@ def instantiate(config):
             pretrained_backbone=config.pretrained_backbone,
             n_time_samples=config.n_time_samples,
             ga_only=config.ga_only,
+            flow_grid=config.flow_grid,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
@@ -124,6 +125,19 @@ def instantiate(config):
     
     print(config)
     run = wandb_create_run(config.run_name)
+    if run is not None and isinstance(model, CliffordFlow):
+        run.config.update({
+            "flow_grid": config.flow_grid,
+            "ga_only": config.ga_only,
+            "hidden_dim": config.hidden_dim,
+            "n_cond_mv": config.n_cond_mv,
+            "n_time_samples": config.n_time_samples,
+            "pretrained_backbone": config.pretrained_backbone,
+            "params_excluding_backbone": sum(
+                p.numel() for name, p in model.named_parameters()
+                if not name.startswith("adapter.backbone.")
+            ),
+        })
     print("W&B logging set up completed")
 
     return train_loader, val_loader, model, optimizer, scheduler, criterion, run

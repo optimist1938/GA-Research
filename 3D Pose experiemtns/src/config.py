@@ -36,6 +36,8 @@ def create_argparser():
     parser.add_argument("--eval_samples", type=int, default=32)
 
     # Clifford Flow
+    # Spatial size of the image-to-multivector grid (16 preserves old runs).
+    parser.add_argument("--flow_grid", type=int, default=16)
     parser.add_argument("--n_cond_mv", type=int, default=4)
     # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
     parser.add_argument("--n_time_samples", type=int, default=1)
