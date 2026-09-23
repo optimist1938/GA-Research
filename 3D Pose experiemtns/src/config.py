@@ -39,6 +39,10 @@ def create_argparser():
     parser.add_argument("--n_cond_mv", type=int, default=4)
     # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
     parser.add_argument("--n_time_samples", type=int, default=1)
+    # Ablation: drop the additive MVLinear skip term and MVSiLU activations from
+    # both CGENN heads (condition_head, vector_field), leaving pure weighted
+    # geometric-product layers only.
+    parser.add_argument("--ga_only", action=argparse.BooleanOptionalAction, default=False)
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)

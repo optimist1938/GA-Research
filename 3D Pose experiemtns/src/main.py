@@ -81,6 +81,7 @@ def instantiate(config):
             n_cond_mv=config.n_cond_mv,
             pretrained_backbone=config.pretrained_backbone,
             n_time_samples=config.n_time_samples,
+            ga_only=config.ga_only,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")

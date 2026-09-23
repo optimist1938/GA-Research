@@ -203,6 +203,8 @@ class TralaleroTralala(nn.Module):
         in_features: int = 512,
         hidden_dim: Union[int, List[int]] = 32,
         out_features: int = 9,
+        include_first_order: bool = True,
+        use_activation: bool = True,
     ):
         super().__init__()
 
@@ -214,6 +216,10 @@ class TralaleroTralala(nn.Module):
         if len(hidden_dims) == 0:
             raise ValueError("hidden_dim must be a non-empty int or List[int]")
 
+        # include_first_order=False drops each layer's additive MVLinear skip
+        # term (fcgp.py/gp.py's `linear_left`), leaving only the weighted
+        # geometric-product path. use_activation=False drops the MVSiLU
+        # nonlinearities. Together: a "GA only" ablation of this CGENN block.
         self.blocks = nn.ModuleList()
         prev = in_features
 
@@ -221,17 +227,21 @@ class TralaleroTralala(nn.Module):
             self.blocks.append(
                 nn.ModuleDict({
                     "fc": FullyConnectedSteerableGeometricProductLayer(
-                        algebra, in_features=prev, out_features=hd
+                        algebra, in_features=prev, out_features=hd,
+                        include_first_order=include_first_order,
                     ),
-                    "act1": MVSiLU(algebra, hd),
-                    "gp": SteerableGeometricProductLayer(algebra, hd),
-                    "act2": MVSiLU(algebra, hd),
+                    "act1": MVSiLU(algebra, hd) if use_activation else nn.Identity(),
+                    "gp": SteerableGeometricProductLayer(
+                        algebra, hd, include_first_order=include_first_order,
+                    ),
+                    "act2": MVSiLU(algebra, hd) if use_activation else nn.Identity(),
                 })
             )
             prev = hd
 
         self.out = FullyConnectedSteerableGeometricProductLayer(
-            algebra, in_features=prev, out_features=out_features
+            algebra, in_features=prev, out_features=out_features,
+            include_first_order=include_first_order,
         )
 
     def forward(self, x):
@@ -278,17 +288,28 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1):
+                 n_time_samples: int = 1, ga_only: bool = False):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
-        self.condition_head = TralaleroTralala(algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv)
-        self.vector_field = TralaleroTralala(algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1)
+        self.ga_only = ga_only
+        # Ablation: drop the MVLinear skip term and MVSiLU activations from both
+        # CGENN heads (condition_head and vector_field), leaving pure weighted
+        # geometric-product layers. See TralaleroTralala.
+        self.condition_head = TralaleroTralala(
+            algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv,
+            include_first_order=not ga_only, use_activation=not ga_only,
+        )
+        self.vector_field = TralaleroTralala(
+            algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1,
+            include_first_order=not ga_only, use_activation=not ga_only,
+        )
 
         nn.init.zeros_(self.vector_field.out.weight)
-        nn.init.zeros_(self.vector_field.out.linear_left.weight)
+        if hasattr(self.vector_field.out, "linear_left"):
+            nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
     def condition(self, x):
         mv = self.adapter(x)
