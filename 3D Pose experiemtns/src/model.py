@@ -264,20 +264,28 @@ def _ga_to_canonical_mv(mv_grid, mv_dim):
 
 class ImageToMultivectors(nn.Module):
     # ResNet -> HeatMap -> ConvAdapter -> n multivectors (grid x grid)
-    def __init__(self, algebra, grid=16, pretrained_backbone: bool = False):
+    def __init__(self, algebra, grid=16, pretrained_backbone: bool = False, adapter_channels: int = 256):
         super().__init__()
         if grid < 1:
             raise ValueError("grid must be a positive integer")
+        if adapter_channels < 1:
+            raise ValueError("adapter_channels must be a positive integer")
         mv_dim = 2**algebra.dim
         self.backbone = build_encoder("resnet", pretrained=pretrained_backbone)
         backbone_channels = self.backbone.output_shape[0]
 
+        # adapter_channels sizes the first 1x1 conv (backbone_channels -> adapter_channels),
+        # which for the default 256 is by far the biggest matrix in the whole non-backbone
+        # model (2048*256 = 524,288 params for a ResNet-50 backbone -- more than the entire
+        # GA head at the default 16x16 grid). The second conv keeps the same 4x bottleneck
+        # ratio as the original 256->64 default.
+        mid_channels = max(8, adapter_channels // 4)
         self.conv_adapter = nn.Sequential(
-            nn.Conv2d(backbone_channels, 256, kernel_size=1, bias=False),
-            nn.BatchNorm2d(256), nn.SiLU(inplace=True),
-            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(64), nn.SiLU(inplace=True),
-            nn.Conv2d(64, mv_dim, kernel_size=1, bias=True),
+            nn.Conv2d(backbone_channels, adapter_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(adapter_channels), nn.SiLU(inplace=True),
+            nn.Conv2d(adapter_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels), nn.SiLU(inplace=True),
+            nn.Conv2d(mid_channels, mv_dim, kernel_size=1, bias=True),
             nn.AdaptiveAvgPool2d((grid, grid)),
         )
         self.n_mv = grid * grid
@@ -290,10 +298,12 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16):
+                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16,
+                 adapter_channels: int = 256):
         super().__init__()
         self.algebra = algebra
-        self.adapter = ImageToMultivectors(algebra, grid=flow_grid, pretrained_backbone=pretrained_backbone)
+        self.adapter = ImageToMultivectors(algebra, grid=flow_grid, pretrained_backbone=pretrained_backbone,
+                                           adapter_channels=adapter_channels)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.ga_only = ga_only

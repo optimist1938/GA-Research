@@ -38,6 +38,12 @@ def create_argparser():
     # Clifford Flow
     # Spatial size of the image-to-multivector grid (16 preserves old runs).
     parser.add_argument("--flow_grid", type=int, default=16)
+    # ConvAdapter's first 1x1 conv width (backbone_channels -> adapter_channels); the
+    # second conv is adapter_channels//4 wide, same ratio as the 256->64 default. This
+    # single conv is the single biggest weight matrix in the non-backbone model (2048*256
+    # params for a ResNet-50 backbone at the default 256), and is untouched by --flow_grid
+    # or --ga_only -- 256 preserves old runs.
+    parser.add_argument("--adapter_channels", type=int, default=256)
     parser.add_argument("--n_cond_mv", type=int, default=4)
     # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
     parser.add_argument("--n_time_samples", type=int, default=1)
