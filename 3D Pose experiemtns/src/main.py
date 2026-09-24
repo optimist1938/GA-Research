@@ -83,6 +83,8 @@ def instantiate(config):
             n_time_samples=config.n_time_samples,
             ga_only=config.ga_only,
             flow_grid=config.flow_grid,
+            drop_linear_skip=config.drop_linear_skip,
+            drop_activation=config.drop_activation,
         )
     else:
         raise ValueError(f"Unknown model: {config.model}")
@@ -129,6 +131,8 @@ def instantiate(config):
         run.config.update({
             "flow_grid": config.flow_grid,
             "ga_only": config.ga_only,
+            "drop_linear_skip": config.drop_linear_skip,
+            "drop_activation": config.drop_activation,
             "hidden_dim": config.hidden_dim,
             "n_cond_mv": config.n_cond_mv,
             "n_time_samples": config.n_time_samples,

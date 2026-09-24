@@ -290,23 +290,28 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16):
+                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16,
+                 drop_linear_skip: bool = False, drop_activation: bool = False):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, grid=flow_grid, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.ga_only = ga_only
-        # Ablation: drop the MVLinear skip term and MVSiLU activations from both
-        # CGENN heads (condition_head and vector_field), leaving pure weighted
-        # geometric-product layers. See TralaleroTralala.
+        # ga_only=True drops both (kept for backward compat with the earlier ga_only
+        # run); drop_linear_skip/drop_activation let each be tested independently, to
+        # find out which one is actually responsible for ga_only's accuracy loss --
+        # only the skip term (a real out_features x in_features MVLinear weight) has
+        # meaningful params to save; MVSiLU is nearly free either way.
+        include_first_order = not (ga_only or drop_linear_skip)
+        use_activation = not (ga_only or drop_activation)
         self.condition_head = TralaleroTralala(
             algebra, in_features=self.adapter.n_mv, hidden_dim=hidden_dim, out_features=self.n_cond_mv,
-            include_first_order=not ga_only, use_activation=not ga_only,
+            include_first_order=include_first_order, use_activation=use_activation,
         )
         self.vector_field = TralaleroTralala(
             algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1,
-            include_first_order=not ga_only, use_activation=not ga_only,
+            include_first_order=include_first_order, use_activation=use_activation,
         )
 
         nn.init.zeros_(self.vector_field.out.weight)

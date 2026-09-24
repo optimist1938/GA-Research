@@ -43,8 +43,15 @@ def create_argparser():
     parser.add_argument("--n_time_samples", type=int, default=1)
     # Ablation: drop the additive MVLinear skip term and MVSiLU activations from
     # both CGENN heads (condition_head, vector_field), leaving pure weighted
-    # geometric-product layers only.
+    # geometric-product layers only. Kept for backward compat; --drop_linear_skip
+    # and --drop_activation below let each half be tested independently.
     parser.add_argument("--ga_only", action=argparse.BooleanOptionalAction, default=False)
+    # Drop only the additive MVLinear skip term (real params: a full out_features x
+    # in_features weight per fc/gp layer), keeping MVSiLU activations.
+    parser.add_argument("--drop_linear_skip", action=argparse.BooleanOptionalAction, default=False)
+    # Drop only the MVSiLU activations (nearly parameter-free), keeping the MVLinear
+    # skip term.
+    parser.add_argument("--drop_activation", action=argparse.BooleanOptionalAction, default=False)
 
     # I2P / I2P_IPDF
     parser.add_argument("--pe_freqs", type=int, default=4)
