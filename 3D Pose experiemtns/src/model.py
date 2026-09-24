@@ -290,13 +290,21 @@ class ImageToMultivectors(nn.Module):
 
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=[32], n_cond_mv=4, pretrained_backbone: bool = False,
-                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16):
+                 n_time_samples: int = 1, ga_only: bool = False, flow_grid: int = 16,
+                 vector_field_hidden_dim=None):
         super().__init__()
         self.algebra = algebra
         self.adapter = ImageToMultivectors(algebra, grid=flow_grid, pretrained_backbone=pretrained_backbone)
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.ga_only = ga_only
+        # Capacity-reallocation ablation: vector_field_hidden_dim, if given, sizes
+        # vector_field independently of condition_head's hidden_dim -- e.g. paired
+        # with a smaller --flow_grid (which shrinks condition_head's input width a
+        # lot), so the params freed there can be spent widening/deepening
+        # vector_field instead, at roughly the same total budget. Defaults to
+        # hidden_dim (old behavior: both heads share one width).
+        vf_hidden_dim = vector_field_hidden_dim if vector_field_hidden_dim is not None else hidden_dim
         # Ablation: drop the MVLinear skip term and MVSiLU activations from both
         # CGENN heads (condition_head and vector_field), leaving pure weighted
         # geometric-product layers. See TralaleroTralala.
@@ -305,7 +313,7 @@ class CliffordFlow(nn.Module):
             include_first_order=not ga_only, use_activation=not ga_only,
         )
         self.vector_field = TralaleroTralala(
-            algebra, in_features=2 + self.n_cond_mv, hidden_dim=hidden_dim, out_features=1,
+            algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1,
             include_first_order=not ga_only, use_activation=not ga_only,
         )
 

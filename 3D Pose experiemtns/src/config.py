@@ -38,6 +38,11 @@ def create_argparser():
     # Clifford Flow
     # Spatial size of the image-to-multivector grid (16 preserves old runs).
     parser.add_argument("--flow_grid", type=int, default=16)
+    # Capacity-reallocation ablation: vector_field's own hidden_dim, independent of
+    # --hidden_dim (which still sizes condition_head). None (default) falls back to
+    # --hidden_dim, i.e. both heads share one width as before. Pair with a smaller
+    # --flow_grid to spend condition_head's freed params here instead.
+    parser.add_argument("--vector_field_hidden_dim", type=int, nargs="+", default=None)
     parser.add_argument("--n_cond_mv", type=int, default=4)
     # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
     parser.add_argument("--n_time_samples", type=int, default=1)
