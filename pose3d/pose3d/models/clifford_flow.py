@@ -7,7 +7,7 @@ Euler ODE integration with an optional multi-sample geodesic medoid.
 
 Experimental variants are all off by default and selected in `pose3d.config.Features`
 and `FlowConfig`: `adapter_grid`, `adapter_channels`, `vector_field_hidden_dim`,
-`mlp_heads` and `fisher_prior`.
+`mlp_heads`, `fisher_prior` and `fisher_mode`.
 """
 
 import torch
@@ -29,6 +29,9 @@ from pose3d.models.encoders import (
     is_dense_backbone,
 )
 from pose3d.models.ga_layers import TralaleroTralala
+
+
+FISHER_MODES = ("shared_detach", "shared", "two_backbone")
 
 
 class ImageToMultivectors(nn.Module):
@@ -140,10 +143,14 @@ class CliffordFlow(nn.Module):
                  freeze_backbone: bool = False,
                  vector_field_hidden_dim=None,
                  mlp_heads: bool = False,
-                 fisher_checkpoint: str = None):
+                 fisher_checkpoint: str = None,
+                 fisher_mode: str = "shared_detach"):
         super().__init__()
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
+        if fisher_mode not in FISHER_MODES:
+            raise ValueError(f"fisher_mode must be one of {FISHER_MODES}, got {fisher_mode!r}")
+        self.fisher_mode = fisher_mode
         self.algebra = algebra
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
@@ -151,11 +158,13 @@ class CliffordFlow(nn.Module):
         mv_dim = int(2**algebra.dim)
         vf_hidden_dim = hidden_dim if vector_field_hidden_dim is None else vector_field_hidden_dim
 
-        # With fisher_checkpoint set, one shared ResNet-101 feeds cond_mv (gradient
-        # from the flow-matching MSE only) and, on a detached copy, the Fisher head
-        # (gradient from the Fisher NLL only). Detaching there keeps the head
-        # tracking the backbone's drifting features instead of staying calibrated to
-        # its pretrained-time values.
+        # With fisher_checkpoint set, r0 is drawn from the pretrained matrix Fisher head.
+        #   shared_detach: one ResNet-101 feeds cond_mv (flow MSE gradient only) and, on a
+        #     detached copy, the Fisher head (Fisher NLL gradient only). Run tri30r7e.
+        #   shared: the same, without the detach, so the backbone learns from both losses
+        #     (the Fisher parameters sit inside the loss, as in Liu et al.'s flow).
+        #   two_backbone: the Fisher net is frozen and only draws r0; the flow keeps its own
+        #     trainable backbone and conv adapter, i.e. the baseline flow with a better r0.
         self.fisher_net = None
         self.adapter = None
         if fisher_checkpoint:
@@ -163,10 +172,23 @@ class CliffordFlow(nn.Module):
             self.fisher_net = fisher_prior.ResnetHead(
                 base, n_classes=13, embedding_dim=32, num_hidden_nodes=512, n_out=9)
             self.fisher_net.load_state_dict(torch.load(fisher_checkpoint, map_location="cpu"))
+            # The ImageNet classifier is only there so the checkpoint loads. Nothing uses it,
+            # and a trainable parameter without a gradient breaks DDP.
+            for prm in base.fc.parameters():
+                prm.requires_grad_(False)
 
-            self._fisher_n_mv = 8
-            self.fisher_proj = nn.Linear(base.output_size, self._fisher_n_mv * mv_dim)
-            cond_in_features = self._fisher_n_mv
+            if fisher_mode == "two_backbone":
+                for prm in self.fisher_net.parameters():
+                    prm.requires_grad_(False)
+                self.adapter = ImageToMultivectors(
+                    algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone,
+                    encoder_type=encoder_type, depth_anything_model=depth_anything_model,
+                    freeze_backbone=freeze_backbone, adapter_channels=adapter_channels)
+                cond_in_features = self.adapter.n_mv
+            else:
+                self._fisher_n_mv = 8
+                self.fisher_proj = nn.Linear(base.output_size, self._fisher_n_mv * mv_dim)
+                cond_in_features = self._fisher_n_mv
         else:
             self.adapter = ImageToMultivectors(
                 algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone,
@@ -195,19 +217,32 @@ class CliffordFlow(nn.Module):
             nn.init.zeros_(self.vector_field.out.weight)
             nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.fisher_net is not None and self.fisher_mode == "two_backbone":
+            self.fisher_net.eval()   # frozen: keep its BatchNorm statistics fixed
+        return self
+
+    def _fisher_matrix(self, latent, cls):
+        # cls + 1: Liu et al.'s checkpoint indexes its class embedding from 1 on Pascal3D+.
+        class_feat = self.fisher_net.class_embedding(cls.view(-1) + 1)
+        return self.fisher_net.head(torch.cat([latent, class_feat], dim=1)).view(-1, 3, 3)
+
     def _features(self, img, cls):
         """Condition multivectors, plus the Fisher head's matrix A (None without a prior)."""
         if self.fisher_net is None:
             return self.condition_head(self.adapter(img)), None
 
+        if self.fisher_mode == "two_backbone":
+            cond_mv = self.condition_head(self.adapter(img))
+            with torch.no_grad():
+                return cond_mv, self._fisher_matrix(self.fisher_net.base(img), cls)
+
         latent = self.fisher_net.base(img)
         mv = self.fisher_proj(latent).reshape(-1, self._fisher_n_mv, 2**self.algebra.dim)
         cond_mv = self.condition_head(mv)
-
-        class_feat = self.fisher_net.class_embedding(cls.view(-1) + 1)
-        head_in = torch.cat([latent.detach(), class_feat], dim=1)
-        A = self.fisher_net.head(head_in).view(-1, 3, 3)
-        return cond_mv, A
+        head_latent = latent.detach() if self.fisher_mode == "shared_detach" else latent
+        return cond_mv, self._fisher_matrix(head_latent, cls)
 
     def condition(self, x, cls=None):
         cond_mv, _ = self._features(x, cls)
@@ -231,7 +266,7 @@ class CliffordFlow(nn.Module):
         r1 = matrix_to_rotor(rot_gt)
 
         fisher_loss = None
-        if fisher_a is not None:
+        if fisher_a is not None and self.fisher_mode != "two_backbone":
             fisher_loss = -fisher_prior.log_prob(fisher_a, rot_gt).mean()
 
         k = self.n_time_samples

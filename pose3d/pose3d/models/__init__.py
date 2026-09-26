@@ -31,6 +31,7 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         vector_field_hidden_dim=fl.vector_field_hidden_dim,
         mlp_heads=f.mlp_heads,
         fisher_checkpoint=fl.fisher_checkpoint if f.fisher_prior else None,
+        fisher_mode=fl.fisher_mode,
     )
 
 

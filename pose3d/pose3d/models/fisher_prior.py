@@ -44,43 +44,42 @@ def log_prob(A, R):
     return trace - S.sum(-1) - norm_approx(S).log()
 
 
-def _sample_bingham(A4, Omega, std, M_star, n, oversample=8):
-    device = A4.device
-    while True:
-        eps = torch.randn(n * oversample, 4, device=device)
-        y = std * eps
-        s = y / y.norm(dim=-1, keepdim=True)
-        p_bing = torch.exp(-(s * A4 * s).sum(-1))
-        p_acg = ((s * Omega * s).sum(-1)) ** (-2)
-        accept = torch.rand(n * oversample, device=device) < p_bing / (M_star * p_acg)
-        if accept.sum() >= n:
-            return s[accept][:n]
+@torch.no_grad()
+def sample_batch(A, b=1.5, oversample=8):
+    """One matrix Fisher sample per row of A: (N, 3, 3) -> (N, 3, 3).
 
+    Rejection sampling (Bingham proposal from an angular central Gaussian) run for all
+    rows at once; the rows still without an accepted draw are retried until none are left.
+    It is not differentiable, so A is detached.
+    """
+    A = A.detach().float()
+    n = A.shape[0]
+    U, S, Vh = proper_svd(A)
 
-def sample_one(A, b=1.5, oversample=8):
-    # A: (3, 3) -> single (3, 3) rotation. Rejection sampling isn't
-    # differentiable, so this always runs on a detached A.
-    U, S, Vh = proper_svd(A.detach())
-
-    A4 = torch.zeros(4, device=A.device, dtype=A.dtype)
-    A4[1] = 2 * (S[1] + S[2])
-    A4[2] = 2 * (S[0] + S[2])
-    A4[3] = 2 * (S[0] + S[1])
+    A4 = torch.zeros(n, 4, device=A.device, dtype=A.dtype)
+    A4[:, 1] = 2 * (S[:, 1] + S[:, 2])
+    A4[:, 2] = 2 * (S[:, 0] + S[:, 2])
+    A4[:, 3] = 2 * (S[:, 0] + S[:, 1])
 
     Omega = 1 + 2 * A4 / b
     std = Omega ** -0.5
-    M_star = np.exp(-(4 - b) / 2) * (4 / b) ** 2
+    M_star = float(np.exp(-(4 - b) / 2) * (4 / b) ** 2)
 
-    quat = _sample_bingham(A4, Omega, std, M_star, n=1, oversample=oversample)
-    R = quat_to_rotmat(quat)[0]
-    return U @ R @ Vh
+    quat = torch.zeros(n, 4, device=A.device, dtype=A.dtype)
+    todo = torch.arange(n, device=A.device)
+    while todo.numel() > 0:
+        m = todo.numel()
+        y = std[todo, None, :] * torch.randn(m, oversample, 4, device=A.device, dtype=A.dtype)
+        s = y / y.norm(dim=-1, keepdim=True)
+        p_bing = torch.exp(-(s * A4[todo, None, :] * s).sum(-1))
+        p_acg = ((s * Omega[todo, None, :] * s).sum(-1)) ** (-2)
+        accept = torch.rand(m, oversample, device=A.device, dtype=A.dtype) < p_bing / (M_star * p_acg)
+        got = accept.any(dim=1)
+        first = accept.float().argmax(dim=1)
+        quat[todo[got]] = s[torch.arange(m, device=A.device), first][got]
+        todo = todo[~got]
 
-
-@torch.no_grad()
-def sample_batch(A):
-    # A: (N, 3, 3) -> (N, 3, 3), one sample per row. Used only as r0, an
-    # initial guess drawn from a frozen, pretrained Fisher head.
-    return torch.stack([sample_one(a) for a in A], dim=0)
+    return U @ quat_to_rotmat(quat) @ Vh
 
 
 def conv3x3(in_planes, out_planes, stride=1):

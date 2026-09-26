@@ -140,7 +140,7 @@ class Features:
     # comparison showing the GA layers matter, not a candidate improvement).
     mlp_heads: bool = False
     # Draw the flow's source rotor r0 from a pretrained matrix Fisher head instead of the
-    # uniform distribution (needs FlowConfig.fisher_checkpoint). Unfinished run only.
+    # uniform distribution (needs FlowConfig.fisher_checkpoint, mode in FlowConfig.fisher_mode).
     fisher_prior: bool = False
 
 
@@ -193,6 +193,10 @@ class FlowConfig:
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None
+    # How the Fisher prior shares the backbone with the flow (see CliffordFlow): shared_detach
+    # (run tri30r7e), shared (no detach, joint training) or two_backbone (frozen Fisher net
+    # only draws r0, the flow has its own backbone).
+    fisher_mode: Literal["shared_detach", "shared", "two_backbone"] = "shared_detach"
 
 
 @dataclass
