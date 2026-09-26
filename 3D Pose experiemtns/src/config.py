@@ -44,9 +44,9 @@ def create_argparser():
     # params for a ResNet-50 backbone at the default 256), and is untouched by --flow_grid
     # or --ga_only -- 256 preserves old runs.
     parser.add_argument("--adapter_channels", type=int, default=256)
-    parser.add_argument("--n_cond_mv", type=int, default=4)
+    parser.add_argument("--n_cond_mv", type=int, default=64)
     # (t, r0) pairs drawn per image per step, sharing one conditioning pass.
-    parser.add_argument("--n_time_samples", type=int, default=1)
+    parser.add_argument("--n_time_samples", type=int, default=8)
     # Ablation: drop the additive MVLinear skip term and MVSiLU activations from
     # both CGENN heads (condition_head, vector_field), leaving pure weighted
     # geometric-product layers only.
