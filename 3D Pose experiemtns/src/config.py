@@ -15,6 +15,11 @@ def create_argparser():
     parser.add_argument("--platform",type=str,choices=["kaggle","colab"],default="kaggle")
     parser.add_argument("--save_checkpoint", type=bool, default=True)
     parser.add_argument("--multiprocessing", type=bool, default=False)
+    # Reuse the tensors --ram_memory builds instead of decoding every image again each session.
+    # --ram_cache_dir is read-only-safe (a Kaggle input dataset); a miss builds as usual and,
+    # if --ram_cache_save_dir is set, writes the result there (e.g. /kaggle/working/ram_cache).
+    parser.add_argument("--ram_cache_dir", type=str, default=None)
+    parser.add_argument("--ram_cache_save_dir", type=str, default=None)
 
     parser.add_argument("--model", type=str, default="tralalero",
                         choices=["tralalero", "mlp", "i2s", "ga_i2s", "image2pcd", "image2pcd_ipdf", "dummynet", "clifford_flow"])

@@ -5,6 +5,7 @@ from tqdm import tqdm
 import multiprocessing as mp
 from torch.utils.data import Dataset, DataLoader
 import pathlib
+import time
 from src.img_to_pcd_stuff import MeshProcessor
 from src.evaluation_metrics import project_to_orthogonal_manifold, create_technical_matrices
 import pandas as pd
@@ -132,6 +133,22 @@ class InMemoryDataset(Dataset):
                 self.targets[write_pos:write_pos + bsz].copy_(rots.to(torch.float32))
                 write_pos += bsz
 
+    def save(self, path):
+        path = pathlib.Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        torch.save({"imgs": self.imgs, "targets": self.targets, "store_uint8": self.store_uint8}, tmp)
+        tmp.replace(path)   # a half-written file never looks like a finished cache
+
+    @classmethod
+    def load(cls, path):
+        blob = torch.load(path, map_location="cpu", weights_only=True)
+        ds = cls.__new__(cls)
+        ds.base = None
+        ds.img_key, ds.rot_key = "img", "rot"
+        ds.imgs, ds.targets, ds.store_uint8 = blob["imgs"], blob["targets"], blob["store_uint8"]
+        return ds
+
     def __len__(self):
         return self.imgs.shape[0]
 
@@ -143,16 +160,49 @@ class InMemoryDataset(Dataset):
         return {"img": x, "rot": y}
 
 
+def _cache_file(directory, split):
+    return pathlib.Path(directory) / f"pascal_{split}.pt" if directory else None
+
+
+def _num_builder(config):
+    return 4 if config.platform == "kaggle" else 2
+
+
+def _ram_dataset(split, config, use_multiprocessing=False):
+    """--ram_memory tensors for `split` ("train"/"val").
+
+    Loaded from --ram_cache_dir when a cache file is there (Pascal3D is not even constructed,
+    which skips parsing every annotation .mat); built from Pascal3D otherwise and, if
+    --ram_cache_save_dir is set, written out for the next session.
+    """
+    t0 = time.time()
+    cached = _cache_file(config.ram_cache_dir, split)
+    if cached is not None and cached.exists():
+        ds = InMemoryDataset.load(cached)
+        print(f"[timing] {split}: loaded {len(ds)} samples from cache {cached} in {time.time() - t0:.1f}s")
+        return ds
+    base = Pascal3D(config.path_to_datasets, train=(split == "train"))
+    ds = InMemoryDataset(base, build_workers=_num_builder(config), use_multiprocessing=use_multiprocessing)
+    print(f"[timing] {split}: built {len(ds)} samples from Pascal3D in {time.time() - t0:.1f}s")
+    save_to = _cache_file(config.ram_cache_save_dir, split)
+    if save_to is not None:
+        t1 = time.time()
+        ds.save(save_to)
+        print(f"[timing] {split}: saved cache to {save_to} in {time.time() - t1:.1f}s")
+    return ds
+
+
 def create_dataloaders(config):
     if config.dataset == "dummynet":
         train_dataset = DummyPointCloudDataset(config, size=1000)
         val_dataset = DummyPointCloudDataset(config, size=100)
     elif not config.sanity_check:
-        train = Pascal3D(config.path_to_datasets, train=True)
-        val = Pascal3D(config.path_to_datasets, train=False)
-        num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(train,build_workers=num_builder, use_multiprocessing=config.multiprocessing) if config.ram_memory else train
-        val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
+        if config.ram_memory:
+            train_dataset = _ram_dataset("train", config, use_multiprocessing=config.multiprocessing)
+            val_dataset = _ram_dataset("val", config)
+        else:
+            train_dataset = Pascal3D(config.path_to_datasets, train=True)
+            val_dataset = Pascal3D(config.path_to_datasets, train=False)
     else:
         train_dataset = val_dataset = PascalSanityCheckDataset(config)
     num_workers = 2 if config.ram_memory else 4
