@@ -32,6 +32,8 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         conv_adapter=fl.conv_adapter,
         mlp_heads=f.mlp_heads,
         fisher_checkpoint=fl.fisher_checkpoint if f.fisher_prior else None,
+        cond_dropout=fl.cond_dropout,
+        guidance_scale=fl.guidance_scale,
     )
 
 

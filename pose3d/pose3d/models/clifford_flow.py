@@ -7,7 +7,7 @@ Euler ODE integration with an optional multi-sample geodesic medoid.
 
 Experimental variants are all off by default and selected in `pose3d.config.Features`
 and `FlowConfig`: `adapter_grid`, `adapter_channels`, `conv_adapter`, `vector_field_hidden_dim`,
-`mlp_heads` and `fisher_prior`.
+`mlp_heads`, `fisher_prior` and classifier-free guidance (`cond_dropout`, `guidance_scale`).
 """
 
 import torch
@@ -157,10 +157,16 @@ class CliffordFlow(nn.Module):
                  vector_field_hidden_dim=None,
                  conv_adapter: bool = True,
                  mlp_heads: bool = False,
-                 fisher_checkpoint: str = None):
+                 fisher_checkpoint: str = None,
+                 cond_dropout: float = 0.0,
+                 guidance_scale: float = 1.0):
         super().__init__()
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
+        if cond_dropout and fisher_checkpoint:
+            raise ValueError("cond_dropout (classifier-free guidance) and fisher_prior cannot be combined")
+        if not 0.0 <= cond_dropout < 1.0:
+            raise ValueError("cond_dropout must be in [0, 1)")
         self.algebra = algebra
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
@@ -213,6 +219,16 @@ class CliffordFlow(nn.Module):
             nn.init.zeros_(self.vector_field.out.weight)
             nn.init.zeros_(self.vector_field.out.linear_left.weight)
 
+        # Classifier-free guidance: during training the image condition of a cond_dropout
+        # fraction of images is swapped for a learned null condition, so one network learns
+        # both v(R_t, t | image) and v(R_t, t). predict() then extrapolates
+        # v_null + w * (v_image - v_null); w = 1 is the plain conditional flow.
+        self.cond_dropout = float(cond_dropout)
+        self.guidance_scale = float(guidance_scale)
+        self.null_cond = None
+        if self.cond_dropout > 0:
+            self.null_cond = nn.Parameter(torch.zeros(self.n_cond_mv, mv_dim))
+
     def _features(self, img, cls):
         """Condition multivectors, plus the Fisher head's matrix A (None without a prior)."""
         if self.fisher_net is None:
@@ -247,6 +263,11 @@ class CliffordFlow(nn.Module):
         # flow-matching samples for one shared conditioning pass.
         cond_mv, fisher_a = self._features(img, cls)
         r1 = matrix_to_rotor(rot_gt)
+        if self.null_cond is not None and self.training:
+            # Per image, before the time-sample repeat, so all k samples of an image agree.
+            # torch.where keeps null_cond in the graph even when nothing is dropped (DDP).
+            drop = torch.rand(cond_mv.shape[0], device=cond_mv.device) < self.cond_dropout
+            cond_mv = torch.where(drop[:, None, None], self.null_cond.expand_as(cond_mv), cond_mv)
 
         fisher_loss = None
         if fisher_a is not None:
@@ -295,9 +316,20 @@ class CliffordFlow(nn.Module):
         idx = dist.sum(-1).argmin(-1)
         return rotors[torch.arange(b, device=rotors.device), idx]
 
+    def _guided_velocity(self, rotor, t, cond_mv, w):
+        if self.null_cond is None or w == 1.0:
+            return self.velocity(rotor, t, cond_mv)
+        n = rotor.shape[0]
+        null = self.null_cond.expand_as(cond_mv)
+        v = self.velocity(torch.cat([rotor, rotor]), torch.cat([t, t]), torch.cat([cond_mv, null]))
+        v_cond, v_null = v[:n], v[n:]
+        return v_null + w * (v_cond - v_null)
+
     @torch.no_grad()
-    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = 20):
+    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = 20,
+                guidance_scale: float = None):
         b = x.shape[0]
+        w = self.guidance_scale if guidance_scale is None else float(guidance_scale)
         n_samples = max(1, int(n_samples))
 
         cond_mv, fisher_a = self._features(x, cls)
@@ -314,7 +346,7 @@ class CliffordFlow(nn.Module):
         dt = 1.0 / steps
         for i in range(steps):
             t = torch.full((rotor.shape[0],), i * dt, device=x.device)
-            v = self.velocity(rotor, t, cond_mv)
+            v = self._guided_velocity(rotor, t, cond_mv, w)
             rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
 
         if n_samples > 1:

@@ -125,7 +125,8 @@ def main(argv=None):
 
     wandb_log_code(run, Path("."))
     torch.cuda.empty_cache()
-    train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg)
+    # With --ema the averaged copy is the model that was scored, so it is what gets saved.
+    model = train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg)
 
     if cfg.run.save_checkpoint and not cfg.run.sanity_check and distributed.is_main():
         checkpoint_path = form_checkpoint(model, optimizer, scheduler, cfg)

@@ -95,6 +95,8 @@ class TrainConfig:
     # Samples per image for the multi-sample evaluation run after the last epoch
     # (used when Features.medoid_eval is on).
     eval_samples: int = 32
+    # Per-optimizer-step decay of Features.ema (0.999: ~1000-step horizon).
+    ema_decay: float = 0.999
 
 
 @dataclass
@@ -146,6 +148,9 @@ class Features:
     # Draw the flow's source rotor r0 from a pretrained matrix Fisher head instead of the
     # uniform distribution (needs FlowConfig.fisher_checkpoint). Unfinished run only.
     fisher_prior: bool = False
+    # Evaluate (per epoch, final, checkpoint) with an exponential moving average of the
+    # weights (TrainConfig.ema_decay) instead of the last iterate. Untested.
+    ema: bool = False
 
 
 @dataclass
@@ -207,6 +212,13 @@ class FlowConfig:
     # adapter_grid / adapter_channels are unused. 9.63 deg (mnpsfhmd) vs 9.46 with it
     # (6te3pvqa), n=1 each. --conv_adapter brings the adapter back.
     conv_adapter: bool = False
+    # Classifier-free guidance (untested): fraction of training images whose condition is
+    # replaced by a learned null condition (0 disables it), the guidance weight w used by
+    # per-epoch validation and the headline final number (1 = no guidance), and extra w
+    # values the final evaluation also scores (logged as final_*_w<w>).
+    cond_dropout: float = 0.0
+    guidance_scale: float = 1.0
+    guidance_scales: Optional[List[float]] = None
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None

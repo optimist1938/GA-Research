@@ -74,6 +74,8 @@ def build_model(checkpoint, device):
         vector_field_hidden_dim=saved.get("vector_field_hidden_dim"),
         conv_adapter=saved.get("conv_adapter", True),
         mlp_heads=saved.get("mlp_heads", False),
+        cond_dropout=saved.get("cond_dropout", 0.0),
+        guidance_scale=saved.get("guidance_scale", 1.0),
     )
 
     result = model.load_state_dict(checkpoint["model"], strict=False)

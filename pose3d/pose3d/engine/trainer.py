@@ -5,6 +5,7 @@ import time
 
 import numpy as np
 import torch
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from tqdm import tqdm
 
 from pose3d.engine.distributed import (
@@ -76,7 +77,7 @@ def build_step(model, criterion, cfg):
     return wrap_ddp(TrainStep(model, criterion, cfg), cfg)
 
 
-def train_epoch(model, loader, optimizer, criterion, cfg, step=None):
+def train_epoch(model, loader, optimizer, criterion, cfg, step=None, ema=None):
     total_loss = 0.0
     n_objects = 0
     device_type = "cuda" if cfg.device.type == "cuda" else "cpu"
@@ -102,6 +103,8 @@ def train_epoch(model, loader, optimizer, criterion, cfg, step=None):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+        if ema is not None:
+            ema.update_parameters(model)
 
         bs = data["img"].shape[0]
         total_loss += float(loss.detach().item()) * bs
@@ -129,17 +132,26 @@ def validate_epoch(model, loader, criterion, cfg):
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg):
+    """Train, then score; returns the model that was evaluated (the EMA copy with --ema)."""
     n_epochs = cfg.train.n_epochs
     step = build_step(model, criterion, cfg)
+    # BatchNorm running statistics are averaged too (use_buffers), so the EMA copy is
+    # evaluated with statistics that match its weights.
+    ema = (AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(cfg.train.ema_decay),
+                         use_buffers=True)
+           if cfg.features.ema else None)
+    eval_model = ema.module if ema is not None else model
     for i in range(n_epochs):
         t0 = time.time()
         sampler = getattr(train_loader, "sampler", None)
         if hasattr(sampler, "set_epoch"):
             sampler.set_epoch(i)
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, cfg, step=step)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, cfg, step=step, ema=ema)
         sync_buffers(model)   # rank 0's BatchNorm statistics, so every shard is scored alike
-        val_loss = validate_epoch(model, val_loader, criterion, cfg)
-        mre = np.median(calculate_evaluation_metrics(model, val_loader, cfg)).__float__()
+        if ema is not None:
+            sync_buffers(ema)
+        val_loss = validate_epoch(eval_model, val_loader, criterion, cfg)
+        mre = np.median(calculate_evaluation_metrics(eval_model, val_loader, cfg)).__float__()
 
         metrics = {
             "train_loss": train_loss,
@@ -160,10 +172,24 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             )
             log_offline_sync(run, cfg, step=i, metrics=metrics)
 
-    final_evaluation(model, val_loader, run, cfg)
+    final_evaluation(eval_model, val_loader, run, cfg, raw_model=model if ema is not None else None)
+    return eval_model
 
 
-def final_evaluation(model, val_loader, run, cfg):
+def _scored(model, val_loader, cfg, n_samples, guidance_scale=None):
+    """(median error, acc@15, acc@30), optionally at another classifier-free guidance weight."""
+    saved = getattr(model, "guidance_scale", None)
+    if guidance_scale is not None:
+        model.guidance_scale = guidance_scale
+    try:
+        err = calculate_evaluation_metrics(model, val_loader, cfg, n_samples=n_samples)
+    finally:
+        if guidance_scale is not None:
+            model.guidance_scale = saved
+    return float(np.median(err)), acc_at(err, 15), acc_at(err, 30)
+
+
+def final_evaluation(model, val_loader, run, cfg, raw_model=None):
     '''Re-score the trained model with multi-sample prediction.
 
     Per-epoch metrics use a single draw so they stay cheap; a generative model
@@ -173,13 +199,24 @@ def final_evaluation(model, val_loader, run, cfg):
     if n_samples <= 1:
         return None
 
-    err = calculate_evaluation_metrics(model, val_loader, cfg, n_samples=n_samples)
+    med, a15, a30 = _scored(model, val_loader, cfg, n_samples)
     metrics = {
-        "final_median_rotation_error": float(np.median(err)),
-        "final_acc@15": acc_at(err, 15),
-        "final_acc@30": acc_at(err, 30),
+        "final_median_rotation_error": med,
+        "final_acc@15": a15,
+        "final_acc@30": a30,
         "final_eval_samples": n_samples,
     }
+    # With --ema, the last iterate too, so one run shows what the averaging bought.
+    if raw_model is not None:
+        med, a15, a30 = _scored(raw_model, val_loader, cfg, n_samples)
+        metrics.update({"final_median_rotation_error_raw": med,
+                        "final_acc@15_raw": a15, "final_acc@30_raw": a30})
+    # Classifier-free guidance weights beyond the headline one.
+    if getattr(model, "null_cond", None) is not None:
+        for w in cfg.flow.guidance_scales or []:
+            med, a15, a30 = _scored(model, val_loader, cfg, n_samples, guidance_scale=w)
+            metrics.update({f"final_median_rotation_error_w{w:g}": med,
+                            f"final_acc@15_w{w:g}": a15, f"final_acc@30_w{w:g}": a30})
 
     if is_main():
         print(
