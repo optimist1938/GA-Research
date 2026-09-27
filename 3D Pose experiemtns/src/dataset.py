@@ -19,14 +19,42 @@ import pandas as pd
 CACHE_FILE_VERSION = 1
 
 
+def _cache_file_name(split: str) -> str:
+    return f"pascal3d_{split}_in_memory_v{CACHE_FILE_VERSION}.pt"
+
+
+def _find_prebuilt_cache(split: str) -> Path | None:
+    """Find a prebuilt RAM cache in any attached Kaggle dataset.
+
+    Attach a dataset containing ``pascal3d_{split}_in_memory_v{N}.pt`` (e.g.
+    ``syfry5suvzovvakmuj/pascal3d-ram-cache``) and the whole preparation pass is skipped:
+    the tensors are loaded straight from ``/kaggle/input`` instead of being rebuilt.
+    Returns ``None`` when no attached dataset carries a cache of this version.
+    """
+    inputs = Path("/kaggle/input")
+    if not inputs.is_dir():
+        return None
+    name = _cache_file_name(split)
+    for pattern in (f"*/{name}", f"*/*/{name}"):
+        for candidate in sorted(inputs.glob(pattern)):
+            return candidate
+    return None
+
+
 def _in_memory_cache_path(config, split: str) -> Path:
     if config.platform == "kaggle":
+        prebuilt = _find_prebuilt_cache(split)
+        if prebuilt is not None:
+            print(f"[dataset] {split}: using prebuilt RAM cache {prebuilt}")
+            return prebuilt
         cache_dir = Path("/kaggle/working/cache")
     else:
         cache_dir = Path(config.path_to_datasets) / "cache"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / f"pascal3d_{split}_in_memory_v{CACHE_FILE_VERSION}.pt"
+    path = cache_dir / _cache_file_name(split)
+    print(f"[dataset] {split}: RAM cache {'hit' if path.exists() else 'will be built at'} {path}")
+    return path
 
 
 class PascalSanityCheckDataset(Dataset):
@@ -202,13 +230,11 @@ def create_dataloaders(config):
         val = Pascal3D(config.path_to_datasets, train=False)
 
         num_builder = 4 if config.platform == "kaggle" else 2
-        train_dataset = InMemoryDataset(train,build_workers=num_builder, use_multiprocessing=config.multiprocessing) if config.ram_memory else train
-        val_dataset = InMemoryDataset(val,build_workers=num_builder) if config.ram_memory else val
-
         if config.ram_memory:
             train_dataset = InMemoryDataset(
                 train,
                 build_workers=num_builder,
+                use_multiprocessing=config.multiprocessing,
                 cache_path=_in_memory_cache_path(config, split="train"),
             )
 

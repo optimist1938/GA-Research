@@ -187,3 +187,8 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Kaggle API credentials - never commit these
+kaggle.json
+kaggle*.json
+*kaggle_token*/

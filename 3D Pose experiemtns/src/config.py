@@ -137,7 +137,9 @@ def create_argparser():
         default=False,
     )
     parser.add_argument("--label_smoothing", type=float, default=0.0)
-    parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=False)
+    # On by default: the in-RAM cache is a large speedup, and on Kaggle an attached
+    # cache dataset (see _find_prebuilt_cache) skips the build entirely. --no-ram_memory opts out.
+    parser.add_argument("--ram_memory", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--lr", type=float, default=1e-3)
 
