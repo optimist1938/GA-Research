@@ -1,0 +1,163 @@
+[
+  {
+    "band": "A",
+    "bands": "A",
+    "dim": 1,
+    "n_basis": [
+      8
+    ],
+    "n_coef": 135,
+    "solver": "matlab_pinv",
+    "fit_seconds": 1.9,
+    "nmse_model_db": -14.340815668459987,
+    "nmse_no_model_db": -10.892291954396505,
+    "nmse_reference_db": -33.451348715802695,
+    "improvement_db": 3.448523714063482,
+    "nmse_train_db": -14.296583329971222,
+    "nmse_val_db": -14.51720837805107,
+    "numerical_rank": 120,
+    "cond_rx": "1.355e+21"
+  },
+  {
+    "band": "A",
+    "bands": "AB",
+    "dim": 2,
+    "n_basis": [
+      8,
+      8
+    ],
+    "n_coef": 1215,
+    "solver": "matlab_pinv",
+    "fit_seconds": 26.4,
+    "nmse_model_db": -24.120929816588635,
+    "nmse_no_model_db": -10.892291954396505,
+    "nmse_reference_db": -33.451348715802695,
+    "improvement_db": 13.22863786219213,
+    "nmse_train_db": -24.122728645439157,
+    "nmse_val_db": -24.138851957690473,
+    "numerical_rank": 1168,
+    "cond_rx": "1.032e+21"
+  },
+  {
+    "band": "A",
+    "bands": "AC",
+    "dim": 2,
+    "n_basis": [
+      8,
+      8
+    ],
+    "n_coef": 1215,
+    "solver": "matlab_pinv",
+    "fit_seconds": 34.1,
+    "nmse_model_db": -14.433249021293852,
+    "nmse_no_model_db": -10.892291954396505,
+    "nmse_reference_db": -33.451348715802695,
+    "improvement_db": 3.540957066897347,
+    "nmse_train_db": -14.461673555761188,
+    "nmse_val_db": -14.313778813270325,
+    "numerical_rank": 1167,
+    "cond_rx": "1.270e+21"
+  },
+  {
+    "band": "A",
+    "bands": "ABC",
+    "dim": 3,
+    "n_basis": [
+      8,
+      4,
+      4
+    ],
+    "n_coef": 3375,
+    "solver": "matlab_pinv",
+    "fit_seconds": 146.1,
+    "nmse_model_db": -24.72696854364748,
+    "nmse_no_model_db": -10.892291954396505,
+    "nmse_reference_db": -33.451348715802695,
+    "improvement_db": 13.834676589250975,
+    "nmse_train_db": -24.980756323401835,
+    "nmse_val_db": -23.847256448999413,
+    "numerical_rank": 3269,
+    "cond_rx": "3.819e+21"
+  },
+  {
+    "band": "A",
+    "bands": "ABC",
+    "dim": 3,
+    "n_basis": [
+      8,
+      4,
+      4
+    ],
+    "n_coef": 3375,
+    "solver": "ridge",
+    "fit_seconds": 121.3,
+    "nmse_model_db": -24.812604990085553,
+    "nmse_no_model_db": -10.892291954396505,
+    "nmse_reference_db": -33.451348715802695,
+    "improvement_db": 13.920313035689048,
+    "nmse_train_db": -24.905813289580216,
+    "nmse_val_db": -24.472627326445586,
+    "numerical_rank": 3269,
+    "cond_rx": "3.819e+21"
+  },
+  {
+    "band": "B",
+    "bands": "BA",
+    "dim": 2,
+    "n_basis": [
+      8,
+      8
+    ],
+    "n_coef": 1215,
+    "solver": "matlab_pinv",
+    "fit_seconds": 28.8,
+    "nmse_model_db": -23.235647264843124,
+    "nmse_no_model_db": -15.800375429013727,
+    "nmse_reference_db": -33.47473386742658,
+    "improvement_db": 7.435271835829397,
+    "nmse_train_db": -23.513128982936536,
+    "nmse_val_db": -22.25863807899852,
+    "numerical_rank": 1168,
+    "cond_rx": "1.096e+21"
+  },
+  {
+    "band": "C",
+    "bands": "CA",
+    "dim": 2,
+    "n_basis": [
+      8,
+      8
+    ],
+    "n_coef": 1215,
+    "solver": "matlab_pinv",
+    "fit_seconds": 45.9,
+    "nmse_model_db": -23.070769358531003,
+    "nmse_no_model_db": -11.999314139502529,
+    "nmse_reference_db": -30.69910320062712,
+    "improvement_db": 11.071455219028474,
+    "nmse_train_db": -23.111701285711867,
+    "nmse_val_db": -22.957129941697808,
+    "numerical_rank": 1168,
+    "cond_rx": "3.387e+20"
+  },
+  {
+    "band": "C",
+    "bands": "CB",
+    "dim": 2,
+    "n_basis": [
+      8,
+      8
+    ],
+    "n_coef": 1215,
+    "solver": "matlab_pinv",
+    "fit_seconds": 90.3,
+    "nmse_model_db": -22.581122362714503,
+    "nmse_no_model_db": -11.999314139502529,
+    "nmse_reference_db": -30.69910320062712,
+    "improvement_db": 10.581808223211974,
+    "nmse_train_db": -22.668154633828546,
+    "nmse_val_db": -22.290623860890932,
+    "numerical_rank": 1169,
+    "cond_rx": "1.704e+21"
+  }
+]
