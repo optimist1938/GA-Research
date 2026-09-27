@@ -7,7 +7,7 @@ Euler ODE integration with an optional multi-sample geodesic medoid.
 
 Experimental variants are all off by default and selected in `pose3d.config.Features`
 and `FlowConfig`: `adapter_grid`, `adapter_channels`, `vector_field_hidden_dim`,
-`mlp_heads` and `fisher_prior`.
+`condition_head`, `mlp_heads` and `fisher_prior`.
 """
 
 import torch
@@ -139,11 +139,14 @@ class CliffordFlow(nn.Module):
                  depth_anything_model: str = DEPTH_ANYTHING_DEFAULT,
                  freeze_backbone: bool = False,
                  vector_field_hidden_dim=None,
+                 condition_head: bool = True,
                  mlp_heads: bool = False,
                  fisher_checkpoint: str = None):
         super().__init__()
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
+        if not condition_head and (mlp_heads or fisher_checkpoint):
+            raise ValueError("--no-condition_head cannot be combined with mlp_heads or fisher_prior")
         self.algebra = algebra
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
@@ -174,9 +177,15 @@ class CliffordFlow(nn.Module):
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels)
             cond_in_features = self.adapter.n_mv
 
-        self.condition_head = TralaleroTralala(
-            algebra, in_features=cond_in_features, hidden_dim=hidden_dim,
-            out_features=self.n_cond_mv)
+        if condition_head:
+            self.condition_head = TralaleroTralala(
+                algebra, in_features=cond_in_features, hidden_dim=hidden_dim,
+                out_features=self.n_cond_mv)
+        else:
+            # The adapter's pooled grid is the conditioning itself: spatial aggregation
+            # becomes fixed average pooling and the vector field picks which cells matter.
+            self.n_cond_mv = cond_in_features
+            self.condition_head = nn.Identity()
         self.vector_field = TralaleroTralala(
             algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1)
 

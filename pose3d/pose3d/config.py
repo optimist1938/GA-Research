@@ -196,6 +196,9 @@ class FlowConfig:
     # Hidden widths of the vector field alone (None: same as hidden_dim). Paired with a
     # smaller adapter_grid this reallocates parameters; 10.49 deg (unconfirmed).
     vector_field_hidden_dim: Optional[List[int]] = None
+    # --no-condition_head feeds the adapter's adapter_grid**2 multivectors straight to the
+    # vector field (n_cond_mv is then ignored), so its budget can go to the vector field.
+    condition_head: bool = True
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None

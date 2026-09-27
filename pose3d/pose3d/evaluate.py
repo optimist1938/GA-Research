@@ -71,6 +71,7 @@ def build_model(checkpoint, device):
         adapter_grid=saved.get("adapter_grid", saved.get("flow_grid", 16)),
         adapter_channels=saved.get("adapter_channels", 256),
         vector_field_hidden_dim=saved.get("vector_field_hidden_dim"),
+        condition_head=saved.get("condition_head", True),
         mlp_heads=saved.get("mlp_heads", False),
     )
 

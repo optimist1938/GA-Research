@@ -29,6 +29,7 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         depth_anything_model=m.depth_anything_model,
         freeze_backbone=f.freeze_encoder,
         vector_field_hidden_dim=fl.vector_field_hidden_dim,
+        condition_head=fl.condition_head,
         mlp_heads=f.mlp_heads,
         fisher_checkpoint=fl.fisher_checkpoint if f.fisher_prior else None,
     )
