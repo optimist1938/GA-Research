@@ -158,6 +158,14 @@ class DataConfig:
     # Reuse the tensors ram_memory builds instead of decoding every image each session.
     ram_cache_dir: Optional[str] = None        # read pascal_{train,val}.pt from here
     ram_cache_save_dir: Optional[str] = None   # write them here after a normal build
+    # Image2Sphere's training data held in RAM (Kaggle dataset `syfry5suvzovvakmuj/pascal3d-synth-pack`:
+    # the real train images + 2.38M re-rendered RenderForCNN images, see datasets/packed.py). With
+    # use_warp / use_synth the train set is read from here and augmented per access; picked
+    # automatically when mounted (SYNTH_PACK_DIRS).
+    synth_pack_dir: Optional[str] = None
+    # Draw synthetic images with the pack's importance weights (restores the PASCAL3D+ viewpoint
+    # distribution after the ShapeNet-v2 azimuth relabel). Off: uniform draws, as Image2Sphere.
+    synth_pack_weights: bool = False
     # --dataset symsol: which shape subset (image2sphere.dataset.SymsolDataset class_names).
     # 1: the standard 5-shape benchmark (tet, cube, icosa, cone, cyl). 2/3/4: the single-shape
     # near-symmetric variants (sphereX/cylO/tetX).
@@ -446,6 +454,25 @@ PRE_CACHE_DIRS = (
 )
 
 
+# Where Kaggle mounts `syfry5suvzovvakmuj/pascal3d-synth-pack` (DataConfig.synth_pack_dir).
+SYNTH_PACK_DIRS = (
+    "/kaggle/input/pascal3d-synth-pack",
+    "/kaggle/input/datasets/syfry5suvzovvakmuj/pascal3d-synth-pack",
+)
+
+
+def _auto_synth_pack(cfg: Config) -> None:
+    """Point --synth_pack_dir at the mounted pack when the run asks for warp / synthetic data."""
+    f, d = cfg.features, cfg.data
+    if d.synth_pack_dir or cfg.run.dataset != "pascal" or not (f.use_warp or f.use_synth):
+        return
+    for directory in SYNTH_PACK_DIRS:
+        if (pathlib.Path(directory) / "synth_index.npy").exists():
+            d.synth_pack_dir = directory
+            print(f"synth pack: training data from {directory}")
+            return
+
+
 def _auto_pre_cache(cfg: Config) -> None:
     """Point --ram_cache_dir at the mounted pre-built tensors (Features.pre_cache)."""
     f, d = cfg.features, cfg.data
@@ -453,8 +480,11 @@ def _auto_pre_cache(cfg: Config) -> None:
         return
     # The tensors are one un-augmented pass over the images with no class labels, so they only
     # stand in for a normal build when nothing per-access is asked of the data.
-    if (cfg.run.dataset != "pascal" or cfg.run.sanity_check or not f.ram_memory or f.use_warp
-            or f.use_synth or f.raw_cache or f.fisher_prior or d.cache_draws != 1):
+    # With the synth pack the train set comes from the pack, so the cache only serves validation,
+    # which use_warp / use_synth do not touch.
+    per_access = (f.use_warp or f.use_synth) and not d.synth_pack_dir
+    if (cfg.run.dataset != "pascal" or cfg.run.sanity_check or not f.ram_memory or per_access
+            or f.raw_cache or f.fisher_prior or d.cache_draws != 1):
         return
     for directory in PRE_CACHE_DIRS:
         path = pathlib.Path(directory)
@@ -477,5 +507,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
                 value = tuple(value)
             values[fld.name] = value
         setattr(cfg, name, cls(**values))
+    _auto_synth_pack(cfg)
     _auto_pre_cache(cfg)
     return cfg

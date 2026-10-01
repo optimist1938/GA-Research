@@ -79,6 +79,17 @@ def _bound_synthetic_pool(train, max_synth):
 
 def _train_dataset(cfg):
     f, d = cfg.features, cfg.data
+    if d.synth_pack_dir and (f.use_warp or f.use_synth):
+        # Image2Sphere's Pascal3D(train=True, use_warp, use_synth), read from RAM and augmented on
+        # every access (the RAM cache below would freeze one draw of the augmentation).
+        from pose3d.datasets.packed import PackedPascal3D
+        t0 = time.time()
+        ds = PackedPascal3D(d.synth_pack_dir, use_warp=f.use_warp, use_synth=f.use_synth,
+                            use_weights=d.synth_pack_weights, max_synth=d.max_synth)
+        n_syn = len(ds.synth_dataset) if ds.synth_dataset is not None else 0
+        print(f"[timing] train: synth pack, {len(ds.real_dataset)} real + {n_syn} synthetic images, "
+              f"{len(ds)} samples per epoch, loaded in {time.time() - t0:.1f}s")
+        return ds
     if f.ram_memory and not f.raw_cache:
         cached = _load_cached("train", cfg)
         if cached is not None:
