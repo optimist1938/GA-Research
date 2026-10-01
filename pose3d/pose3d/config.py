@@ -95,6 +95,8 @@ class TrainConfig:
     # Samples per image for the multi-sample evaluation run after the last epoch
     # (used when Features.medoid_eval is on).
     eval_samples: int = 32
+    # Per-optimizer-step decay of Features.ema (0.999: ~1000-step horizon).
+    ema_decay: float = 0.999
 
 
 @dataclass
@@ -130,6 +132,14 @@ class Features:
     pre_cache: bool = True
 
     # ---- experimental (False) ---------------------------------------------------
+    # Evaluate (every epoch and at the end) and save an exponential moving average of the
+    # weights (TrainConfig.ema_decay; BatchNorm statistics averaged too) instead of the last
+    # iterate. The final evaluation also scores the last iterate as final_*_raw.
+    ema: bool = False
+    # Draw the flow's validation noise from a fixed seed, so every evaluation of the same
+    # weights gives the same numbers and epoch-to-epoch changes come from the weights only.
+    # Training randomness is untouched (the generator state is restored afterwards).
+    fixed_val_noise: bool = False
     # Pascal3D's own augmentation (flip / up-direction jitter / bbox jitter). Run
     # `lyqxhz1p` reached 9.71 deg with it but its exact recipe is unconfirmed.
     use_warp: bool = False

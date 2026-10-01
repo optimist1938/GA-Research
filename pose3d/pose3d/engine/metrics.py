@@ -123,6 +123,17 @@ def calculate_evaluation_metrics(model, loader, cfg, n_samples: int = 1, return_
     accepts them); the rest go through `forward` plus `decode_output`. Under DDP the loader holds
     this rank's shard and the errors of all ranks are joined, so every rank must call it.
     """
+    if getattr(cfg.features, "fixed_val_noise", False):
+        # Same noise every evaluation: seed the RNGs (per rank, the loader is sharded) and
+        # restore their state afterwards so training draws are not affected.
+        devices = [cfg.device] if cfg.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(1234 + cfg.rank)
+            return _evaluation_errors(model, loader, cfg, n_samples, return_classes)
+    return _evaluation_errors(model, loader, cfg, n_samples, return_classes)
+
+
+def _evaluation_errors(model, loader, cfg, n_samples, return_classes):
     device = cfg.device
     err, classes = [], []
 
