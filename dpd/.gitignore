@@ -1,0 +1,5 @@
+# Huawei data is not ours to publish: keep it out of git.
+data/
+*.mat
+# Run outputs (PSD plots, result json)
+runs/
