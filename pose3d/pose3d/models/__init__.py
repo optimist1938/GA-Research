@@ -35,6 +35,8 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         gatr=dict(num_blocks=fl.gatr_blocks, mv_channels=fl.gatr_mv_channels,
                   s_channels=fl.gatr_s_channels, num_heads=fl.gatr_heads),
         mlp_heads=f.mlp_heads,
+        flow_param=fl.flow_param,
+        x1_loss=fl.x1_loss,
         fisher_checkpoint=fl.fisher_checkpoint if f.fisher_prior else None,
     )
 

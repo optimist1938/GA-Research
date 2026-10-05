@@ -238,6 +238,15 @@ class FlowConfig:
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token
     gatr_heads: int = 4
+    # What the vector field's grade-2 output means. "velocity": the constant geodesic velocity
+    # log(r0~ r1) (reference recipe). "x1": the REMAINING displacement log(rt~ r1) = (1-t) v,
+    # bounded by pi (endpoint prediction, as x0-prediction in diffusion); the sampler divides by
+    # (1-t) and its last Euler step lands on the predicted endpoint. Experimental.
+    flow_param: Literal["velocity", "x1"] = "velocity"
+    # Loss for flow_param=x1. "tangent": |b_hat - (1-t) v|^2, the velocity loss reweighted by
+    # (1-t)^2 (its value is ~1/3 of a velocity run's; compare the angles, not the losses).
+    # "geodesic": squared geodesic distance between rt exp(b_hat) and r1, the evaluation metric.
+    x1_loss: Literal["tangent", "geodesic"] = "tangent"
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None

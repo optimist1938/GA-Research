@@ -114,6 +114,8 @@ def build_model(checkpoint, device, eval_rec_level=None):
         condition_head=saved.get("condition_head", "clifford"),
         gatr=dict(num_blocks=saved.get("gatr_blocks", 4), mv_channels=saved.get("gatr_mv_channels", 8),
                   s_channels=saved.get("gatr_s_channels", 32), num_heads=saved.get("gatr_heads", 4)),
+        flow_param=saved.get("flow_param", "velocity"),
+        x1_loss=saved.get("x1_loss", "tangent"),
     )
 
     result = model.load_state_dict(checkpoint["model"], strict=False)

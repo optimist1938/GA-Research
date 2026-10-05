@@ -7,7 +7,14 @@ Euler ODE integration with an optional multi-sample geodesic medoid.
 
 Experimental variants are all off by default and selected in `pose3d.config.Features`
 and `FlowConfig`: `adapter_grid`, `adapter_channels`, `conv_adapter`, `vector_field_hidden_dim`,
-`mlp_heads` and `fisher_prior`.
+`mlp_heads`, `fisher_prior`, `vector_field` / `condition_head` (GATr) and `flow_param`.
+
+`flow_param="x1"` (endpoint prediction): the network's grade-2 output is read as the REMAINING
+displacement b_hat ~ log(r_t~ r_1) = (1 - t) v, bounded by pi, instead of the constant geodesic
+velocity v = log(r_0~ r_1). The ODE velocity is b_hat / (1 - t), so the last Euler step lands on
+the predicted endpoint r_t exp(b_hat). `x1_loss` picks the training loss: "tangent" is
+|b_hat - (1 - t) v|^2 (the velocity loss reweighted by (1 - t)^2), "geodesic" the squared
+geodesic distance between r_t exp(b_hat) and r_1.
 """
 
 import torch
@@ -17,6 +24,7 @@ from pose3d.geometry.flow import (
     exp_map,
     geodesic_distance,
     geodesic_interpolate,
+    geodesic_mse_loss,
     relative_log,
     rotor_multiply,
 )
@@ -29,6 +37,9 @@ from pose3d.models.encoders import (
     is_dense_backbone,
 )
 from pose3d.models.ga_layers import TralaleroTralala
+
+# Floor on (1 - t) when flow_param="x1" turns the remaining displacement into a velocity.
+_X1_EPS = 1e-3
 
 
 class ImageToMultivectors(nn.Module):
@@ -160,10 +171,18 @@ class CliffordFlow(nn.Module):
                  vector_field: str = "clifford",
                  condition_head: str = "clifford",
                  gatr: dict = None,
+                 flow_param: str = "velocity",
+                 x1_loss: str = "tangent",
                  fisher_checkpoint: str = None):
         super().__init__()
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
+        if flow_param not in ("velocity", "x1"):
+            raise ValueError(f"flow_param must be 'velocity' or 'x1', got {flow_param!r}")
+        if x1_loss not in ("tangent", "geodesic"):
+            raise ValueError(f"x1_loss must be 'tangent' or 'geodesic', got {x1_loss!r}")
+        self.flow_param = flow_param
+        self.x1_loss = x1_loss
         if vector_field not in ("clifford", "gatr"):
             raise ValueError(f"vector_field must be 'clifford' or 'gatr', got {vector_field!r}")
         if condition_head not in ("clifford", "gatr"):
@@ -256,12 +275,24 @@ class CliffordFlow(nn.Module):
         cond_mv, _ = self._features(x, cls)
         return cond_mv
 
-    def velocity(self, rotor, t, cond_mv):
+    def _field(self, rotor, t, cond_mv):
+        """The network's grade-2 output at (rotor, t): the velocity v_hat with
+        flow_param="velocity", the remaining displacement b_hat with "x1". (n, 3)."""
         rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
         t_mv = self.algebra.embed(t.reshape(-1, 1), (0,)).unsqueeze(1)
         inp = torch.cat([rotor_mv, t_mv, cond_mv], dim=1)
         out = self.vector_field(inp)[:, 0]
         return self.algebra.get_grade(out, 2)
+
+    def velocity(self, rotor, t, cond_mv):
+        """The bivector velocity the sampler integrates; t is (n,)."""
+        out = self._field(rotor, t, cond_mv)
+        if self.flow_param == "x1":
+            # b_hat = log(r_t~ r_1) = (1 - t) v. Only inference divides; at the last Euler
+            # step (t = 1 - dt) dt * v == b_hat, a jump onto the predicted endpoint. The
+            # clamp is for t = 1 exactly, which predict() never passes (min 1 - t = dt).
+            out = out / (1.0 - t).clamp(min=_X1_EPS).unsqueeze(-1)
+        return out
 
     def forward(self, x, rotor, t, cls=None):
         return self.velocity(rotor, t, self.condition(x, cls))
@@ -294,10 +325,21 @@ class CliffordFlow(nn.Module):
         t = torch.rand(n, device=r1.device)
 
         rt = geodesic_interpolate(r0, r1, t, self.algebra)
-        target = relative_log(r0, r1, self.algebra)
-        pred = self.velocity(rt, t, cond_mv)
-        # Still a per-sample mean, so the value stays comparable across k.
-        loss = (pred - target).pow(2).sum(-1).mean()
+        # Every loss is a per-sample mean, so the value stays comparable across k.
+        if self.flow_param == "velocity":
+            target = relative_log(r0, r1, self.algebra)
+            loss = (self.velocity(rt, t, cond_mv) - target).pow(2).sum(-1).mean()
+        elif self.x1_loss == "tangent":
+            b_hat = self._field(rt, t, cond_mv)
+            # (1 - t) log(r0~ r1) == log(rt~ r1): the remaining displacement, |.| <= pi, so
+            # this is the velocity loss reweighted by (1 - t)^2. Its value is not comparable
+            # with a velocity-parametrised run's (about a third of it); compare the angles.
+            target = (1.0 - t).unsqueeze(-1) * relative_log(r0, r1, self.algebra)
+            loss = (b_hat - target).pow(2).sum(-1).mean()
+        else:
+            b_hat = self._field(rt, t, cond_mv)
+            r1_hat = rotor_multiply(rt, exp_map(b_hat), self.algebra)
+            loss = geodesic_mse_loss(r1_hat, r1, self.algebra)
         if fisher_loss is not None:
             loss = loss + fisher_loss
         return loss
