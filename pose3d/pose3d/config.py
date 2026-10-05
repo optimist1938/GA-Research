@@ -95,6 +95,8 @@ class TrainConfig:
     # Samples per image for the multi-sample evaluation run after the last epoch
     # (used when Features.medoid_eval is on).
     eval_samples: int = 32
+    # Per-optimizer-step decay of Features.ema (0.999: ~1000-step horizon).
+    ema_decay: float = 0.999
 
 
 @dataclass
@@ -130,6 +132,14 @@ class Features:
     pre_cache: bool = True
 
     # ---- experimental (False) ---------------------------------------------------
+    # Evaluate (every epoch and at the end) and save an exponential moving average of the
+    # weights (TrainConfig.ema_decay; BatchNorm statistics averaged too) instead of the last
+    # iterate. The final evaluation also scores the last iterate as final_*_raw.
+    ema: bool = False
+    # Draw the flow's validation noise from a fixed seed, so every evaluation of the same
+    # weights gives the same numbers and epoch-to-epoch changes come from the weights only.
+    # Training randomness is untouched (the generator state is restored afterwards).
+    fixed_val_noise: bool = False
     # Pascal3D's own augmentation (flip / up-direction jitter / bbox jitter). Run
     # `lyqxhz1p` reached 9.71 deg with it but its exact recipe is unconfirmed.
     use_warp: bool = False
@@ -158,6 +168,14 @@ class DataConfig:
     # Reuse the tensors ram_memory builds instead of decoding every image each session.
     ram_cache_dir: Optional[str] = None        # read pascal_{train,val}.pt from here
     ram_cache_save_dir: Optional[str] = None   # write them here after a normal build
+    # Image2Sphere's training data held in RAM (Kaggle dataset `syfry5suvzovvakmuj/pascal3d-synth-pack`:
+    # the real train images + 2.38M re-rendered RenderForCNN images, see datasets/packed.py). With
+    # use_warp / use_synth the train set is read from here and augmented per access; picked
+    # automatically when mounted (SYNTH_PACK_DIRS).
+    synth_pack_dir: Optional[str] = None
+    # Draw synthetic images with the pack's importance weights (restores the PASCAL3D+ viewpoint
+    # distribution after the ShapeNet-v2 azimuth relabel). Off: uniform draws, as Image2Sphere.
+    synth_pack_weights: bool = False
     # --dataset symsol: which shape subset (image2sphere.dataset.SymsolDataset class_names).
     # 1: the standard 5-shape benchmark (tet, cube, icosa, cone, cyl). 2/3/4: the single-shape
     # near-symmetric variants (sphereX/cylO/tetX).
@@ -207,6 +225,19 @@ class FlowConfig:
     # adapter_grid / adapter_channels are unused. 9.63 deg (mnpsfhmd) vs 9.46 with it
     # (6te3pvqa), n=1 each. --conv_adapter brings the adapter back.
     conv_adapter: bool = False
+    # Denoiser network of the flow. "clifford": the CGENN-style Clifford MLP (reference recipe).
+    # "gatr": the Geometric Algebra Transformer (Brehmer et al. 2023) over the rotor, time and
+    # condition multivectors as tokens; the condition head stays a Clifford MLP. The gatr_*
+    # options are unused otherwise. Needs the GATr package (see models/gatr_denoiser.py).
+    vector_field: Literal["clifford", "gatr"] = "clifford"
+    # Same choice for the condition head (backbone multivectors -> n_cond_mv condition
+    # multivectors): "gatr" runs GATr over the backbone tokens plus n_cond_mv learned queries.
+    # Shares the gatr_* sizes with the vector field. Not with mlp_heads or fisher_prior.
+    condition_head: Literal["clifford", "gatr"] = "clifford"
+    gatr_blocks: int = 4
+    gatr_mv_channels: int = 8    # hidden multivector channels per token
+    gatr_s_channels: int = 32    # hidden scalar channels per token
+    gatr_heads: int = 4
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None
@@ -433,6 +464,25 @@ PRE_CACHE_DIRS = (
 )
 
 
+# Where Kaggle mounts `syfry5suvzovvakmuj/pascal3d-synth-pack` (DataConfig.synth_pack_dir).
+SYNTH_PACK_DIRS = (
+    "/kaggle/input/pascal3d-synth-pack",
+    "/kaggle/input/datasets/syfry5suvzovvakmuj/pascal3d-synth-pack",
+)
+
+
+def _auto_synth_pack(cfg: Config) -> None:
+    """Point --synth_pack_dir at the mounted pack when the run asks for warp / synthetic data."""
+    f, d = cfg.features, cfg.data
+    if d.synth_pack_dir or cfg.run.dataset != "pascal" or not (f.use_warp or f.use_synth):
+        return
+    for directory in SYNTH_PACK_DIRS:
+        if (pathlib.Path(directory) / "synth_index.npy").exists():
+            d.synth_pack_dir = directory
+            print(f"synth pack: training data from {directory}")
+            return
+
+
 def _auto_pre_cache(cfg: Config) -> None:
     """Point --ram_cache_dir at the mounted pre-built tensors (Features.pre_cache)."""
     f, d = cfg.features, cfg.data
@@ -440,8 +490,11 @@ def _auto_pre_cache(cfg: Config) -> None:
         return
     # The tensors are one un-augmented pass over the images with no class labels, so they only
     # stand in for a normal build when nothing per-access is asked of the data.
-    if (cfg.run.dataset != "pascal" or cfg.run.sanity_check or not f.ram_memory or f.use_warp
-            or f.use_synth or f.raw_cache or f.fisher_prior or d.cache_draws != 1):
+    # With the synth pack the train set comes from the pack, so the cache only serves validation,
+    # which use_warp / use_synth do not touch.
+    per_access = (f.use_warp or f.use_synth) and not d.synth_pack_dir
+    if (cfg.run.dataset != "pascal" or cfg.run.sanity_check or not f.ram_memory or per_access
+            or f.raw_cache or f.fisher_prior or d.cache_draws != 1):
         return
     for directory in PRE_CACHE_DIRS:
         path = pathlib.Path(directory)
@@ -464,5 +517,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
                 value = tuple(value)
             values[fld.name] = value
         setattr(cfg, name, cls(**values))
+    _auto_synth_pack(cfg)
     _auto_pre_cache(cfg)
     return cfg
