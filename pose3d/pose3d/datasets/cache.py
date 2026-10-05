@@ -225,6 +225,7 @@ class InMemoryDataset(Dataset):
 
         self.targets = torch.empty((total, *rot_shape), dtype=torch.float32)
 
+        self.eval_clss = None   # see set_eval_classes
         self.clss = None
         if self.cls_key is not None:
             cls0 = sample[self.cls_key]
@@ -321,6 +322,7 @@ class InMemoryDataset(Dataset):
         ds.imgs, ds.targets, ds.store_uint8 = blob["imgs"], blob["targets"], blob["store_uint8"]
         ds.n_draws = int(blob.get("n_draws", 1))   # caches written before n_draws hold one draw
         ds.n = ds.imgs.shape[0] // ds.n_draws
+        ds.eval_clss = None
         ds.clss = blob.get("clss")
         ds.cls_key = "cls" if (include_cls and ds.clss is not None) else None
         if include_cls and ds.clss is None:
@@ -328,6 +330,17 @@ class InMemoryDataset(Dataset):
         if not include_cls:
             ds.clss = None
         return ds
+
+    def set_eval_classes(self, classes):
+        """Attach one class label per sample as batch["cls_eval"].
+
+        A key of its own, not "cls": the training and validation losses hand "cls" to the model
+        whenever it is present, and per-class metrics must not change what the model sees.
+        """
+        classes = torch.as_tensor(classes, dtype=torch.long).view(-1, 1)
+        if len(classes) != self.n:
+            raise ValueError(f"{len(classes)} class labels for {self.n} samples")
+        self.eval_clss = classes
 
     def __len__(self):
         return self.n
@@ -341,6 +354,9 @@ class InMemoryDataset(Dataset):
         if self.store_uint8:
             x = x.to(torch.float32) / 255.0
         y = self.targets[idx]
+        out = {"img": x, "rot": y}
         if self.clss is not None:
-            return {"img": x, "rot": y, "cls": self.clss[idx]}
-        return {"img": x, "rot": y}
+            out["cls"] = self.clss[idx]
+        if self.eval_clss is not None:
+            out["cls_eval"] = self.eval_clss[idx % self.n]
+        return out

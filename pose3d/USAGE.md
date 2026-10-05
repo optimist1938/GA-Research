@@ -49,6 +49,42 @@ Re-score a checkpoint from W&B:
 poetry run python -m pose3d.evaluate --artifact <entity/project/name.pth:vN> --path_to_datasets ...
 ```
 
+## GATr denoiser
+
+`--vector_field gatr` swaps the Clifford MLP vector field of `clifford_flow` for the Geometric
+Algebra Transformer ([reference](https://github.com/Qualcomm-AI-research/geometric-algebra-transformer)).
+The rotor, the time and the `n_cond_mv` condition multivectors are embedded in Cl(3,0,1) and become
+the tokens of one sequence; the velocity is read from the rotor token's rotation bivector. The
+condition head stays a Clifford MLP unless `--condition_head gatr`, which runs GATr over the 256
+backbone tokens plus `n_cond_mv` learned query tokens (each token also gets a learned scalar
+embedding, since GATr treats tokens as an unordered set) and reads the condition multivectors from
+the queries. Both share the sizes below. Size them with `--gatr_blocks`, `--gatr_mv_channels`,
+`--gatr_s_channels` and `--gatr_heads`. The default is still `--vector_field clifford`.
+
+```bash
+pip install --no-deps einops opt_einsum \
+  git+https://github.com/Qualcomm-AI-research/geometric-algebra-transformer.git
+poetry run python -m pose3d --path_to_datasets ... --vector_field gatr
+```
+
+Install GATr with `--no-deps`: its `setup.py` pins `numpy<1.25` and `xformers`, which would replace
+the preinstalled torch. `xformers` is only needed for attention masks, which the flow never passes,
+so a stub stands in when it is missing.
+
+## Micro and macro metrics
+
+Every reported number has two versions. Micro is pooled over all validation images, so the big
+classes dominate (car, chair). Macro averages over the 12 Pascal3D+ classes, so each counts the
+same: `class_mean_median_error` (the mean of the per-class medians, the number the IPDF /
+Image2Sphere tables report) every epoch, and at the end also `final_class_mean_acc@15` /
+`@30` plus each class's median and accuracies (`final_median_error_class<c>`,
+`final_acc@15_class<c>`, ...), printed as a table.
+
+The pre-built RAM cache holds no class labels, so they are read from the annotations of the
+mounted Pascal3D+ (no image is decoded) and checked against the cache's ground-truth rotations. If
+Pascal3D+ is not mounted, or the check fails, macro metrics are skipped with a message and the
+run goes on. Other loaders pass the labels through as before.
+
 ## Multi-GPU
 
 Training uses every visible GPU by default (torch DistributedDataParallel, `--ddp`). The run relaunches

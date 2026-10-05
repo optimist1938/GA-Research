@@ -157,10 +157,21 @@ class CliffordFlow(nn.Module):
                  vector_field_hidden_dim=None,
                  conv_adapter: bool = True,
                  mlp_heads: bool = False,
+                 vector_field: str = "clifford",
+                 condition_head: str = "clifford",
+                 gatr: dict = None,
                  fisher_checkpoint: str = None):
         super().__init__()
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
+        if vector_field not in ("clifford", "gatr"):
+            raise ValueError(f"vector_field must be 'clifford' or 'gatr', got {vector_field!r}")
+        if condition_head not in ("clifford", "gatr"):
+            raise ValueError(f"condition_head must be 'clifford' or 'gatr', got {condition_head!r}")
+        if "gatr" in (vector_field, condition_head) and mlp_heads:
+            raise ValueError("GATr heads and mlp_heads cannot be combined")
+        if condition_head == "gatr" and fisher_checkpoint:
+            raise ValueError("condition_head='gatr' and fisher_prior cannot be combined")
         self.algebra = algebra
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
@@ -192,11 +203,20 @@ class CliffordFlow(nn.Module):
                 conv_adapter=conv_adapter)
             cond_in_features = self.adapter.n_mv
 
-        self.condition_head = TralaleroTralala(
-            algebra, in_features=cond_in_features, hidden_dim=hidden_dim,
-            out_features=self.n_cond_mv)
-        self.vector_field = TralaleroTralala(
-            algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1)
+        if condition_head == "gatr":
+            from pose3d.models.gatr_denoiser import GATrConditionHead
+            self.condition_head = GATrConditionHead(
+                cond_in_features, self.n_cond_mv, **(gatr or {}))
+        else:
+            self.condition_head = TralaleroTralala(
+                algebra, in_features=cond_in_features, hidden_dim=hidden_dim,
+                out_features=self.n_cond_mv)
+        if vector_field == "gatr":
+            from pose3d.models.gatr_denoiser import GATrVectorField
+            self.vector_field = GATrVectorField(self.n_cond_mv, **(gatr or {}))
+        else:
+            self.vector_field = TralaleroTralala(
+                algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1)
 
         if mlp_heads:
             # Ablation: same pipeline, heads swapped for plain MLPs sized to the GA
@@ -209,6 +229,11 @@ class CliffordFlow(nn.Module):
                 2 + self.n_cond_mv, 1, mv_dim, _n_hidden_layers(vf_hidden_dim), ga_field)
             nn.init.zeros_(self.vector_field.net[-1].weight)
             nn.init.zeros_(self.vector_field.net[-1].bias)
+        elif vector_field == "gatr":
+            # Zero the output layer so training starts from a zero velocity field, as with the
+            # Clifford MLP below.
+            for p in self.vector_field.out.parameters():
+                nn.init.zeros_(p)
         else:
             nn.init.zeros_(self.vector_field.out.weight)
             nn.init.zeros_(self.vector_field.out.linear_left.weight)

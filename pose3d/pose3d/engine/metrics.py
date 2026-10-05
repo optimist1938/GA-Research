@@ -49,6 +49,29 @@ def per_class_median(err, cls):
     return float(np.mean(list(medians.values()))), medians
 
 
+def per_class_acc(err, cls, theta=15):
+    """{class index: fraction of that class's samples with error below `theta` degrees}."""
+    err, cls = np.asarray(err), np.asarray(cls).reshape(-1)
+    return {int(c): float((err[cls == c] < theta).mean()) for c in np.unique(cls)}
+
+
+def macro_metrics(err, cls):
+    """Class-averaged (macro) counterparts of the pooled (micro) median and Acc@theta.
+
+    Every class weighs the same, so the small, hard ones (boat, bicycle, diningtable) count as
+    much as the large ones (car, chair). `class_mean_median_error` is the published Pascal3D+
+    number (see per_class_median).
+    """
+    mean_median, medians = per_class_median(err, cls)
+    acc15, acc30 = per_class_acc(err, cls, 15), per_class_acc(err, cls, 30)
+    return {
+        "class_mean_median_error": mean_median,
+        "class_mean_acc@15": float(np.mean(list(acc15.values()))),
+        "class_mean_acc@30": float(np.mean(list(acc30.values()))),
+        "class_medians": medians, "class_acc@15": acc15, "class_acc@30": acc30,
+    }
+
+
 def rotation_error_with_projection(input, target):
     input = project_to_orthogonal_manifold(input)
     target = project_to_orthogonal_manifold(target)
@@ -93,12 +116,24 @@ def calculate_evaluation_metrics(model, loader, cfg, n_samples: int = 1, return_
     """Rotation error (degrees) of every sample in `loader`.
 
     With return_classes, returns (errors, class indices) instead, the classes in the same
-    order (None when the loader has no "cls"; the cached training-time loaders don't).
+    order (None when the loader has neither "cls" nor "cls_eval", the labels the cached
+    validation set gets from the Pascal3D+ annotations).
 
     Models exposing `predict` are evaluated through it (with `n_samples` draws when it
     accepts them); the rest go through `forward` plus `decode_output`. Under DDP the loader holds
     this rank's shard and the errors of all ranks are joined, so every rank must call it.
     """
+    if getattr(getattr(cfg, "features", None), "fixed_val_noise", False):
+        # Same noise every evaluation: seed the RNGs (per rank, the loader is sharded) and
+        # restore their state afterwards so training draws are not affected.
+        devices = [cfg.device] if cfg.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(1234 + cfg.rank)
+            return _evaluation_errors(model, loader, cfg, n_samples, return_classes)
+    return _evaluation_errors(model, loader, cfg, n_samples, return_classes)
+
+
+def _evaluation_errors(model, loader, cfg, n_samples, return_classes):
     device = cfg.device
     err, classes = [], []
 
@@ -111,6 +146,9 @@ def calculate_evaluation_metrics(model, loader, cfg, n_samples: int = 1, return_
         if "cls" in batch:
             clas = batch["cls"].to(device)
             classes.append(batch["cls"].view(-1).cpu().numpy())
+        elif "cls_eval" in batch:
+            # Labels for the per-class metrics only; the model never sees them.
+            classes.append(batch["cls_eval"].view(-1).cpu().numpy())
 
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
             kwargs = _sampling_kwargs(model.predict, n_samples)

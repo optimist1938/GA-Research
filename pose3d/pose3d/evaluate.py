@@ -26,7 +26,7 @@ from torch.utils.data import DataLoader
 
 from pose3d.config import Config
 from pose3d.engine.checkpoint import get_available_device
-from pose3d.engine.metrics import acc_at, calculate_evaluation_metrics, per_class_median
+from pose3d.engine.metrics import acc_at, calculate_evaluation_metrics, macro_metrics
 from pose3d.models.clifford_flow import CliffordFlow
 
 
@@ -110,6 +110,10 @@ def build_model(checkpoint, device, eval_rec_level=None):
         vector_field_hidden_dim=saved.get("vector_field_hidden_dim"),
         conv_adapter=saved.get("conv_adapter", True),
         mlp_heads=saved.get("mlp_heads", False),
+        vector_field=saved.get("vector_field", "clifford"),
+        condition_head=saved.get("condition_head", "clifford"),
+        gatr=dict(num_blocks=saved.get("gatr_blocks", 4), mv_channels=saved.get("gatr_mv_channels", 8),
+                  s_channels=saved.get("gatr_s_channels", 32), num_heads=saved.get("gatr_heads", 4)),
     )
 
     result = model.load_state_dict(checkpoint["model"], strict=False)
@@ -159,16 +163,21 @@ def main():
     for n_samples in args.eval_samples:
         err, cls = calculate_evaluation_metrics(model, val_loader, cfg, n_samples=n_samples,
                                                 return_classes=True)
-        class_mean, medians = per_class_median(err, cls)
+        macro = macro_metrics(err, cls)
+        class_mean, medians = macro["class_mean_median_error"], macro["class_medians"]
         per_class[n_samples] = medians
         rows.append((n_samples, float(np.median(err)), class_mean, float(np.mean(err)),
-                     acc_at(err, 15), acc_at(err, 30)))
+                     acc_at(err, 15), acc_at(err, 30),
+                     macro["class_mean_acc@15"], macro["class_mean_acc@30"]))
         print(f"K={n_samples}: median {rows[-1][1]:.3f}, mean of class medians {class_mean:.3f}")
 
     print()
-    print(f"{'samples':>8} {'median':>9} {'cls-mean':>9} {'mean':>9} {'acc@15':>8} {'acc@30':>8}")
-    for n_samples, median, class_mean, mean, a15, a30 in rows:
-        print(f"{n_samples:>8} {median:>9.3f} {class_mean:>9.3f} {mean:>9.3f} {a15:>8.3f} {a30:>8.3f}")
+    print("micro = pooled over all test images; macro (cls-*) = averaged over the classes")
+    print(f"{'samples':>8} {'median':>9} {'cls-mean':>9} {'mean':>9} {'acc@15':>8} {'acc@30':>8}"
+          f" {'cls-a@15':>9} {'cls-a@30':>9}")
+    for n_samples, median, class_mean, mean, a15, a30, c15, c30 in rows:
+        print(f"{n_samples:>8} {median:>9.3f} {class_mean:>9.3f} {mean:>9.3f} {a15:>8.3f} {a30:>8.3f}"
+              f" {c15:>9.3f} {c30:>9.3f}")
 
     print()
     print("Per-class median error:")
@@ -180,7 +189,8 @@ def main():
     if args.output_json:
         result = {
             "checkpoint": str(args.checkpoint or args.artifact),
-            "rows": [dict(zip(("samples", "median", "class_mean_median", "mean", "acc@15", "acc@30"), r))
+            "rows": [dict(zip(("samples", "median", "class_mean_median", "mean", "acc@15", "acc@30",
+                                 "class_mean_acc@15", "class_mean_acc@30"), r))
                      for r in rows],
             "per_class": {str(k): {(names[c] if names else str(c)): m for c, m in v.items()}
                           for k, v in per_class.items()},
