@@ -26,7 +26,9 @@ runner notebook) so `pip` does not replace torch.
 
 ## Run
 
-Run from the `pose3d/` folder. The defaults are the reference recipe:
+Run from the `pose3d/` folder. The defaults are the reference recipe (8.95° on Pascal3D+, see
+`pose3d/config.py`). It needs the GATr package (below) and trains on Image2Sphere's data, read from
+the Kaggle dataset `syfry5suvzovvakmuj/pascal3d-synth-pack` when it is mounted:
 
 ```bash
 poetry run python -m pose3d --path_to_datasets /path/to/data --run_name my-run
@@ -51,20 +53,22 @@ poetry run python -m pose3d.evaluate --artifact <entity/project/name.pth:vN> --p
 
 ## GATr denoiser
 
-`--vector_field gatr` swaps the Clifford MLP vector field of `clifford_flow` for the Geometric
-Algebra Transformer ([reference](https://github.com/Qualcomm-AI-research/geometric-algebra-transformer)).
+The vector field of `clifford_flow` is the Geometric Algebra Transformer by default
+(`--vector_field gatr`, [reference](https://github.com/Qualcomm-AI-research/geometric-algebra-transformer));
+`--vector_field clifford` brings back the Clifford MLP.
 The rotor, the time and the `n_cond_mv` condition multivectors are embedded in Cl(3,0,1) and become
 the tokens of one sequence; the velocity is read from the rotor token's rotation bivector. The
 condition head stays a Clifford MLP unless `--condition_head gatr`, which runs GATr over the 256
 backbone tokens plus `n_cond_mv` learned query tokens (each token also gets a learned scalar
 embedding, since GATr treats tokens as an unordered set) and reads the condition multivectors from
 the queries. Both share the sizes below. Size them with `--gatr_blocks`, `--gatr_mv_channels`,
-`--gatr_s_channels` and `--gatr_heads`. The default is still `--vector_field clifford`.
+`--gatr_s_channels` and `--gatr_heads`.
 
 ```bash
 pip install --no-deps einops opt_einsum \
   git+https://github.com/Qualcomm-AI-research/geometric-algebra-transformer.git
-poetry run python -m pose3d --path_to_datasets ... --vector_field gatr
+poetry run python -m pose3d --path_to_datasets ...                             # GATr (default)
+poetry run python -m pose3d --path_to_datasets ... --vector_field clifford     # Clifford MLP
 ```
 
 Install GATr with `--no-deps`: its `setup.py` pins `numpy<1.25` and `xformers`, which would replace
