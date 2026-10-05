@@ -16,9 +16,12 @@ Credentials
 Two layouts are supported, and may be mixed in one directory:
 
 * **new style** (preferred): one directory per account holding a ``token`` file with an
-  access token, passed to the CLI as ``KAGGLE_API_TOKEN``::
+  access token, passed to the CLI as ``KAGGLE_API_TOKEN``; ``access_token`` (the name
+  ``kaggle auth login`` uses under ``~/.kaggle``) is accepted too, so a symlink to
+  ``~/.kaggle`` can be one of the accounts::
 
       tokens/account5_GrigoryZ/token
+      tokens/account1_me -> ~/.kaggle        (holds access_token)
 
 * **legacy**: a ``kaggle.json`` with ``{"username": ..., "key": ...}``, passed as
   ``KAGGLE_USERNAME`` / ``KAGGLE_KEY``::
@@ -53,6 +56,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+#: File names an account directory may hold its access token under, in order of preference:
+#: ``token`` is this tool's layout, ``access_token`` is what ``kaggle auth login`` writes.
+TOKEN_FILES = ("token", "access_token")
 
 #: Kernel states that mean the account is actively occupying a session.
 ACTIVE_STATES = frozenset({"running", "queued", "cancelRequested"})
@@ -201,8 +208,14 @@ class PoolAccount:
     # -- loading ----------------------------------------------------------------------
     @classmethod
     def from_token_dir(cls, directory: str) -> "PoolAccount":
-        """An account directory holding a ``token`` file (new-style access token)."""
-        path = os.path.join(directory, "token")
+        """An account directory holding a ``token`` or ``access_token`` file (new-style access
+        token; the latter is what ``kaggle auth login`` writes under ``~/.kaggle``)."""
+        for name in TOKEN_FILES:
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                break
+        else:
+            raise ValueError("%s holds none of %s" % (directory, ", ".join(TOKEN_FILES)))
         with open(path, "r") as fh:
             token = fh.read().strip()
         if not token:
@@ -445,7 +458,8 @@ class PoolRouter:
     # -- construction ------------------------------------------------------------------
     @classmethod
     def from_dir(cls, directory: str, **kwargs: Any) -> "PoolRouter":
-        """Load every account in ``directory``: ``<account>/token`` dirs and ``*.json`` files."""
+        """Load every account in ``directory``: ``<account>/token`` (or ``access_token``) dirs
+        and ``*.json`` files."""
         directory = os.path.expanduser(directory)
         if not os.path.isdir(directory):
             raise FileNotFoundError("%s is not a directory" % directory)
@@ -455,7 +469,9 @@ class PoolRouter:
         for entry in sorted(os.listdir(directory)):
             path = os.path.join(directory, entry)
             try:
-                if os.path.isdir(path) and os.path.isfile(os.path.join(path, "token")):
+                if os.path.isdir(path) and any(
+                    os.path.isfile(os.path.join(path, name)) for name in TOKEN_FILES
+                ):
                     accounts.append(PoolAccount.from_token_dir(path))
                 elif entry.lower().endswith(".json") and not entry.startswith("."):
                     accounts.append(PoolAccount.from_json(path))
@@ -465,7 +481,8 @@ class PoolRouter:
             print("skipped unusable credentials: %s" % ", ".join(broken), file=sys.stderr)
         if not accounts:
             raise FileNotFoundError(
-                "no credentials in %s (expected <account>/token dirs or *.json)" % directory
+                "no credentials in %s (expected <account>/token or <account>/access_token dirs, "
+                "or *.json)" % directory
             )
         return cls(accounts, **kwargs)
 

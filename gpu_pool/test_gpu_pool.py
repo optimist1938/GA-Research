@@ -197,6 +197,31 @@ def test_token_and_legacy_credentials_both_load():
         assert "KEY_VALUE_SECRET" not in repr(bob)
 
 
+def test_access_token_credentials_load():
+    # `kaggle auth login` writes ~/.kaggle/access_token; a directory of those (one per account,
+    # or a symlink to ~/.kaggle itself) must load like the `token` layout.
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "account9"))
+        with open(os.path.join(d, "account9", "access_token"), "w") as fh:
+            fh.write("ACCESS_TOKEN_SECRET\n")
+        router = PoolRouter.from_dir(d)
+        (acct,) = router.accounts
+        assert acct.label == "account9" and acct.uses_token
+        assert acct.env() == {"KAGGLE_API_TOKEN": "ACCESS_TOKEN_SECRET"}
+        assert acct.path.endswith("access_token")
+        assert "ACCESS_TOKEN_SECRET" not in repr(acct)
+
+
+def test_docker_image_lands_in_metadata():
+    # Pinning the image that ran a previous job keeps its Python version (the offline wheels
+    # are cp312); the CLI forwards docker_image + docker_image_pinning_type on push.
+    image = "gcr.io/kaggle-private-byod/python@sha256:" + "0" * 64
+    meta = _spec(accelerator="t4", docker_image=image).metadata("u")
+    assert meta["docker_image"] == image and meta["docker_image_pinning_type"] == "original"
+    plain = _spec(accelerator="t4").metadata("u")
+    assert "docker_image" not in plain and "docker_image_pinning_type" not in plain
+
+
 def test_quota_from_cli_row():
     q = Quota.from_row({"resource": "GPU", "used": "0.14h", "remaining": "29.86h",
                         "total": "30.00h", "refreshAt": "2026-10-03T00:00:00"})
