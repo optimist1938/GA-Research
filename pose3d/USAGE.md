@@ -117,3 +117,29 @@ skipped with `--use_warp`, `--use_synth`, `--raw_cache` or `--fisher_prior`.
 differ from the defaults; the other cells clone the branch, install what Kaggle lacks (no Poetry) and run
 `python -m pose3d`. Attach the datasets `syfry5suvzovvakmuj/pascal3d` and
 `syfry5suvzovvakmuj/pascal3d-ram-cache`.
+
+### Offline (RTX / L4, no internet)
+
+The premium accelerators run without internet, so nothing can be cloned or pip-installed.
+`notebooks/clifford-runner-offline.ipynb` is the runner for them: cell 0 holds `RUN_NAME`,
+`BEST_SETUP` (the warp + synth-pack + EMA recipe of the best run) and `EXTRA`; the other cells
+copy the code from a **repo snapshot dataset**, install the wheels of
+`syfry5suvzovvakmuj/ga-research-offline-deps`, set `WANDB_MODE=offline` and run `python -m pose3d`.
+Attach `pascal3d`, `pascal3d-ram-cache`, `pascal3d-synth-pack`, `ga-research-offline-deps` and
+exactly one snapshot. Build the snapshot from the branch and push the notebook with the pool
+launcher (`gpu_pool/README.md`):
+
+```bash
+git archive --format=tar.gz --prefix=GA-Research/ -o /tmp/snap/ga-research-<branch>.tar.gz HEAD
+kaggle datasets init -p /tmp/snap    # then set title/id in dataset-metadata.json
+kaggle datasets create -p /tmp/snap --dir-mode skip
+python gpu_pool/launcher.py --tokens-dir ~/.kaggle-accounts --title <kernel> \
+  --notebook pose3d/notebooks/clifford-runner-offline.ipynb --accelerator rtx6000 \
+  --competition arc-prize-2026-arc-agi-3 --no-internet --dataset syfry5suvzovvakmuj/pascal3d \
+  --dataset syfry5suvzovvakmuj/pascal3d-ram-cache --dataset syfry5suvzovvakmuj/pascal3d-synth-pack \
+  --dataset syfry5suvzovvakmuj/ga-research-offline-deps --dataset <owner>/<snapshot>
+```
+
+Metrics come out of the kernel log (`kaggle kernels logs <owner/kernel>`, one `WANDB_SYNC` JSON
+line per epoch and a `WANDB_SYNC_FINAL` line at the end); `gpu_pool/rtx_monitor.py` can replay
+them into W&B.
