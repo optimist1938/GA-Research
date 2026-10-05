@@ -31,6 +31,9 @@ One directory per account holding a `token` file (a new-style access token from
 └── ...
 ```
 
+The file may also be called `access_token`, the name `kaggle auth login` uses under `~/.kaggle`,
+so your own login can join the pool as a symlink: `ln -s ~/.kaggle ~/pool_tokens/account0_me`.
+
 Legacy `kaggle.json` files (`{"username": ..., "key": ...}`) still work and may be mixed into the
 same directory; they are passed as `KAGGLE_USERNAME` / `KAGGLE_KEY`. Tokens carry no username, so
 the router resolves it with `kaggle config view`.
@@ -154,6 +157,11 @@ notebook use `NotebookSpec(title=..., notebook_path="run.ipynb", accelerator="l4
 | `tpu-v3` / `tpu-v5e` | `Tpu1VmV38` / `TpuV5E8` | **Accepted but silently non-TPU** ([#1197](https://github.com/Kaggle/kaggle-cli/issues/1197)) |
 
 There is no value for the editor's "GPU T4 ×2" ([#1196](https://github.com/Kaggle/kaggle-cli/issues/1196)).
+
+`--docker-image gcr.io/kaggle-private-byod/python@sha256:...` (or `NotebookSpec(docker_image=...)`)
+pins the image a previous kernel ran on (`kaggle kernels pull -m` shows it as `docker_image`).
+Do this for no-internet runs that install version-specific wheels, such as the `cp312` healpy in
+`ga-research-offline-deps`: Kaggle's default image moves, its Python may not.
 
 ## Secrets are per-account and cannot be provisioned via the API
 

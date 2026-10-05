@@ -195,5 +195,6 @@ cython_debug/
 kaggle.json
 kaggle*.json
 */token
+*/access_token
 *_tokens/
 *_tokens_*/

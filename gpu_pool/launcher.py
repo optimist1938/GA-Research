@@ -125,6 +125,10 @@ class NotebookSpec:
     #: checked by a preflight cell and used to filter target accounts.
     required_secrets: List[str] = field(default_factory=list)
     docker_pinning: str = "latest"
+    #: A Kaggle docker image (``gcr.io/kaggle-private-byod/python@sha256:...``, from a previous
+    #: kernel's metadata) to run on instead of the current default. Pins the image's Python,
+    #: which matters when the run installs version-specific wheels offline.
+    docker_image: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.cells and not self.notebook_path:
@@ -231,6 +235,10 @@ class NotebookSpec:
             meta["machine_shape"] = self.machine_shape
         if self.is_tpu:
             meta["enable_tpu"] = True
+        if self.docker_image:
+            # The CLI forwards both; "original" keeps exactly this image on later pushes.
+            meta["docker_image"] = self.docker_image
+            meta["docker_image_pinning_type"] = "original"
         return meta
 
     @property
@@ -592,6 +600,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--github-token-secret")
     parser.add_argument("--public", action="store_true", help="make the kernel public")
     parser.add_argument("--no-internet", action="store_true")
+    parser.add_argument("--docker-image", help="pin a Kaggle image (gcr.io/kaggle-private-byod/python@sha256:...)")
     parser.add_argument("--account", help="force a specific pool account")
     parser.add_argument("--min-hours", type=float, default=1.0)
     parser.add_argument("--idle-only", action="store_true")
@@ -610,6 +619,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         competitions=args.competition,
         is_private=not args.public,
         enable_internet=not args.no_internet,
+        docker_image=args.docker_image,
     )
     if args.notebook:
         spec = NotebookSpec(
