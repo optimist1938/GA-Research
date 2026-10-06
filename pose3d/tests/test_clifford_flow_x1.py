@@ -121,6 +121,31 @@ class X1ParametrisationTest(unittest.TestCase):
             )
         self.assertTrue(torch.allclose(loss.detach(), per_sample.mean(), rtol=1e-5))
 
+    def test_x1_velocity_loss_with_a_gatr_vector_field(self):
+        # The reference recipe's vector field is GATr; x1 only touches what is done with its
+        # grade-2 output, so it has to train and sample there too.
+        try:
+            from pose3d.models.gatr_denoiser import _import_gatr
+            _import_gatr()
+        except ImportError:
+            self.skipTest("GATr package not installed")
+        model = _tiny_flow(flow_param="x1", x1_loss="velocity", vector_field="gatr",
+                           gatr=dict(num_blocks=1, mv_channels=4, s_channels=8, num_heads=1))
+        for p in model.vector_field.out.parameters():
+            torch.nn.init.normal_(p, std=0.1)     # zero-initialised in the model
+        img = torch.rand(2, 3, 64, 64)
+        rot = rotor_to_matrix(random_rotor(2), ALGEBRA)
+        loss = model.compute_loss(img, rot)
+        self.assertTrue(torch.isfinite(loss).item())
+        loss.backward()
+        grads = [p.grad for p in model.vector_field.parameters() if p.grad is not None]
+        self.assertTrue(grads and all(torch.isfinite(g).all() for g in grads))
+        model.eval()
+        pred = model.predict(img, n_samples=2, steps=3)
+        self.assertEqual(pred.shape, (2, 3, 3))
+        eye = torch.eye(3).expand(2, 3, 3)
+        self.assertTrue(torch.allclose(pred @ pred.transpose(-1, -2), eye, atol=1e-4))
+
     def test_default_is_the_velocity_parametrisation(self):
         model = _tiny_flow()
         self.assertEqual(model.flow_param, "velocity")
