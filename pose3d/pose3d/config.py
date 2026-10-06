@@ -1,14 +1,25 @@
 """Experiment configuration: the single place that decides what a default run is.
 
-The defaults reproduce W&B `mnpsfhmd` (9.63 deg median rotation error on Pascal3D+):
-`--model=clifford_flow`, pretrained ResNet-101, no ConvAdapter (the pooled backbone vector
-is reshaped straight into 256 multivectors), both GA heads 88 wide (`flow_hidden_dim=88`),
-`n_cond_mv=64`, `n_time_samples=8`, 100 epochs, `lr=1e-4`, 32-sample medoid evaluation.
-It ties the best run, `6te3pvqa` (9.46 deg, same params budget), without the adapter;
-`--conv_adapter --flow_hidden_dim 32` gives that run back. DDP over every visible GPU and the pre-built Pascal3D
-tensors are on by default too; they speed a run up and leave the recipe's hyperparameters alone.
-(The earlier reference recipe, W&B `k5sblpo8` at 10.25 deg, used ResNet-50; `6te3pvqa` is the
-same recipe with the backbone swapped to ResNet-101.)
+The defaults reproduce the best run, `clifford_flow_gatr_warp_synth_ema_b64` (Kaggle kernel
+`syfry5suvzovvakmuj/clifford-gatr-ema-b64-rtx`, one RTX Pro 6000): 8.95 deg mean of per-class
+median rotation errors on Pascal3D+ (the published metric), 7.85 deg median over all test images.
+`--model=clifford_flow`, pretrained ResNet-101, no ConvAdapter (the pooled backbone vector is
+reshaped straight into 256 multivectors), a Clifford MLP condition head 88 wide
+(`flow_hidden_dim=88`) feeding a GATr vector field (`vector_field=gatr`), `n_cond_mv=64`,
+`n_time_samples=8`, trained on Image2Sphere's data (real images with `use_warp` augmentation +
+RenderForCNN renders, `use_synth`), global batch 64 with lr 1e-4 scaled by sqrt(64/32), 100
+epochs, EMA weights (`ema`), seeded validation noise (`fixed_val_noise`), 32-sample medoid
+evaluation with 20 Euler steps. The training data is read from the Kaggle dataset
+`syfry5suvzovvakmuj/pascal3d-synth-pack`, picked up automatically when mounted (SYNTH_PACK_DIRS);
+without it, use_warp / use_synth fall back to the image files and need the RenderForCNN download.
+DDP over every visible GPU and the pre-built Pascal3D tensors are on by default too; they speed
+a run up and leave the recipe's hyperparameters alone.
+
+The previous reference recipe, W&B `mnpsfhmd` (9.63 deg median over all test images), is the same
+model with the Clifford MLP vector field on real images only:
+`--vector_field clifford --no-use_warp --no-use_synth --no-ema --no-fixed_val_noise
+--batch_size 32 --lr_scaling none`. (Before it: `6te3pvqa`, 9.46 deg with the ConvAdapter,
+`--conv_adapter --flow_hidden_dim 32`; and `k5sblpo8`, 10.25 deg with ResNet-50.)
 
 Experiment workflow (see the root README and the idea board in pose3d/README.md):
 
@@ -82,12 +93,12 @@ class TrainConfig:
     n_epochs: int = 100
     warmup_epochs: int = 5
     # GLOBAL batch: under --ddp each GPU sees batch_size // world_size, so the same value is
-    # the same recipe on 1, 2 or 4 GPUs.
-    batch_size: int = 32
+    # the same recipe on 1, 2 or 4 GPUs. 64 is the 8.95 deg recipe (32 before it).
+    batch_size: int = 64
     lr: float = 1e-4
     # Rescale lr by (batch_size / lr_reference_batch): "linear" or "sqrt". "none" keeps lr
-    # as given. Only needed when batch_size is raised to use more GPUs.
-    lr_scaling: Literal["none", "linear", "sqrt"] = "none"
+    # as given. The 8.95 deg recipe uses sqrt: 1e-4 * sqrt(64 / 32) = 1.41e-4.
+    lr_scaling: Literal["none", "linear", "sqrt"] = "sqrt"
     lr_reference_batch: int = 32
     # mse: plain MSE on the matrix; mse_ortho: MSE + orthogonality penalty (teammates' default).
     loss: LossName = "mse"
@@ -130,21 +141,23 @@ class Features:
     # nothing mounted, or with use_warp / use_synth / raw_cache / fisher_prior, the run builds
     # them as before. --no-pre_cache turns it off.
     pre_cache: bool = True
-
-    # ---- experimental (False) ---------------------------------------------------
+    # The next four were adopted together with vector_field=gatr and batch 64 (8.95 deg, see the
+    # module docstring); their separate contributions are not measured.
     # Evaluate (every epoch and at the end) and save an exponential moving average of the
     # weights (TrainConfig.ema_decay; BatchNorm statistics averaged too) instead of the last
     # iterate. The final evaluation also scores the last iterate as final_*_raw.
-    ema: bool = False
+    ema: bool = True
     # Draw the flow's validation noise from a fixed seed, so every evaluation of the same
     # weights gives the same numbers and epoch-to-epoch changes come from the weights only.
     # Training randomness is untouched (the generator state is restored afterwards).
-    fixed_val_noise: bool = False
-    # Pascal3D's own augmentation (flip / up-direction jitter / bbox jitter). Run
-    # `lyqxhz1p` reached 9.71 deg with it but its exact recipe is unconfirmed.
-    use_warp: bool = False
-    # RenderForCNN synthetic training images (needs a separate download; see max_synth).
-    use_synth: bool = False
+    fixed_val_noise: bool = True
+    # Pascal3D's own augmentation (flip / up-direction jitter / bbox jitter), as Image2Sphere.
+    use_warp: bool = True
+    # RenderForCNN synthetic training images, 3 per real image per epoch, as Image2Sphere
+    # (from the synth pack, DataConfig.synth_pack_dir; otherwise a separate download, see max_synth).
+    use_synth: bool = True
+
+    # ---- experimental (False) ---------------------------------------------------
     # With ram_memory, cache the file reads instead of augmented crops so use_warp stays
     # random per access.
     raw_cache: bool = False
@@ -225,11 +238,12 @@ class FlowConfig:
     # adapter_grid / adapter_channels are unused. 9.63 deg (mnpsfhmd) vs 9.46 with it
     # (6te3pvqa), n=1 each. --conv_adapter brings the adapter back.
     conv_adapter: bool = False
-    # Denoiser network of the flow. "clifford": the CGENN-style Clifford MLP (reference recipe).
-    # "gatr": the Geometric Algebra Transformer (Brehmer et al. 2023) over the rotor, time and
-    # condition multivectors as tokens; the condition head stays a Clifford MLP. The gatr_*
-    # options are unused otherwise. Needs the GATr package (see models/gatr_denoiser.py).
-    vector_field: Literal["clifford", "gatr"] = "clifford"
+    # Denoiser network of the flow. "gatr" (reference recipe, 8.95 deg): the Geometric Algebra
+    # Transformer (Brehmer et al. 2023) over the rotor, time and condition multivectors as tokens;
+    # the condition head stays a Clifford MLP. Needs the GATr package (see models/gatr_denoiser.py).
+    # "clifford": the CGENN-style Clifford MLP (the 9.63 deg recipe); the gatr_* options are
+    # unused then.
+    vector_field: Literal["clifford", "gatr"] = "gatr"
     # Same choice for the condition head (backbone multivectors -> n_cond_mv condition
     # multivectors): "gatr" runs GATr over the backbone tokens plus n_cond_mv learned queries.
     # Shares the gatr_* sizes with the vector field. Not with mlp_heads or fisher_prior.

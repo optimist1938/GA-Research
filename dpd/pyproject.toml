@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "dpd"
+description = "RF power amplifier behavioural modelling and digital predistortion with geometric-algebra models"
+version = "0.1.0"
+packages = [{ include = "dpd" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.15"
+
+torch = ">=2.4"
+numpy = ">=2.0"
+scipy = ">=1.14"
+
+# optional -- nothing in the reference recipe requires these
+pytest = { version = ">=8.0", optional = true }
+matplotlib = { version = ">=3.9", optional = true }
+jupyterlab = { version = ">=4.0", optional = true }
+ipykernel = { version = ">=6.29", optional = true }
+wandb = { version = ">=0.17", optional = true }
+
+# Declared as extras rather than a Poetry group so that both
+# `poetry install -E dev` and `pip install -e ".[dev]"` work.
+[tool.poetry.extras]
+dev = ["pytest"]
+plots = ["matplotlib"]
+notebooks = ["matplotlib", "jupyterlab", "ipykernel"]
+logging = ["wandb"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
