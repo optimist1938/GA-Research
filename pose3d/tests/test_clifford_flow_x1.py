@@ -55,6 +55,7 @@ class X1ParametrisationTest(unittest.TestCase):
         variants = (
             dict(flow_param="x1"),
             dict(flow_param="x1", x1_loss="geodesic"),
+            dict(flow_param="x1", x1_loss="velocity"),
             dict(flow_param="x1", mlp_heads=True),
         )
         for kwargs in variants:
@@ -91,6 +92,34 @@ class X1ParametrisationTest(unittest.TestCase):
         expected = target.pow(2).sum(-1).mean()
         self.assertTrue(torch.allclose(
             ((1 - t) ** 2 * relative_log(r0, r1, ALGEBRA).pow(2).sum(-1)).mean(), expected))
+
+    def test_x1_velocity_loss_is_the_reference_loss_of_the_same_field(self):
+        # x1_loss="velocity" scores b_hat / (1 - t) against v exactly as flow_param="velocity"
+        # scores its output, for every t the sampler visits (1 - t >= 0.05); beyond that the
+        # weight is capped, the target stays the true remaining displacement (1 - t) v.
+        from pose3d.geometry.rotor import matrix_to_rotor
+        model = _tiny_flow(flow_param="x1", x1_loss="velocity").eval()
+        _randomize(model.vector_field)
+        img = torch.rand(2, 3, 64, 64)
+        rot = rotor_to_matrix(random_rotor(2), ALGEBRA)
+
+        torch.manual_seed(5)
+        loss = model.compute_loss(img, rot)
+
+        torch.manual_seed(5)
+        with torch.no_grad():
+            cond = model.condition(img).repeat_interleave(2, 0)
+            r1 = matrix_to_rotor(rot).repeat_interleave(2, 0)
+            r0, t = random_rotor(4), torch.rand(4)
+            rt = geodesic_interpolate(r0, r1, t, ALGEBRA)
+            b_hat = model._field(rt, t, cond)
+            v = relative_log(r0, r1, ALGEBRA)
+            per_sample = torch.where(
+                t <= 0.95,
+                (b_hat / (1 - t).unsqueeze(-1) - v).pow(2).sum(-1),
+                (b_hat - (1 - t).unsqueeze(-1) * v).pow(2).sum(-1) / 0.05 ** 2,
+            )
+        self.assertTrue(torch.allclose(loss.detach(), per_sample.mean(), rtol=1e-5))
 
     def test_default_is_the_velocity_parametrisation(self):
         model = _tiny_flow()

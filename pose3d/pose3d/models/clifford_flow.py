@@ -14,7 +14,8 @@ displacement b_hat ~ log(r_t~ r_1) = (1 - t) v, bounded by pi, instead of the co
 velocity v = log(r_0~ r_1). The ODE velocity is b_hat / (1 - t), so the last Euler step lands on
 the predicted endpoint r_t exp(b_hat). `x1_loss` picks the training loss: "tangent" is
 |b_hat - (1 - t) v|^2 (the velocity loss reweighted by (1 - t)^2), "geodesic" the squared
-geodesic distance between r_t exp(b_hat) and r_1.
+geodesic distance between r_t exp(b_hat) and r_1, "velocity" the reference loss
+|b_hat / (1 - t) - v|^2 (only the network's output differs from flow_param="velocity").
 """
 
 import torch
@@ -40,6 +41,9 @@ from pose3d.models.ga_layers import TralaleroTralala
 
 # Floor on (1 - t) when flow_param="x1" turns the remaining displacement into a velocity.
 _X1_EPS = 1e-3
+# Floor on (1 - t) in the weight of x1_loss="velocity": the smallest 1 - t the default 20-step
+# sampler evaluates, so the loss equals the reference velocity loss wherever the sampler looks.
+_X1_LOSS_FLOOR = 0.05
 
 
 class ImageToMultivectors(nn.Module):
@@ -179,8 +183,8 @@ class CliffordFlow(nn.Module):
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
         if flow_param not in ("velocity", "x1"):
             raise ValueError(f"flow_param must be 'velocity' or 'x1', got {flow_param!r}")
-        if x1_loss not in ("tangent", "geodesic"):
-            raise ValueError(f"x1_loss must be 'tangent' or 'geodesic', got {x1_loss!r}")
+        if x1_loss not in ("tangent", "geodesic", "velocity"):
+            raise ValueError(f"x1_loss must be 'tangent', 'geodesic' or 'velocity', got {x1_loss!r}")
         self.flow_param = flow_param
         self.x1_loss = x1_loss
         if vector_field not in ("clifford", "gatr"):
@@ -336,6 +340,16 @@ class CliffordFlow(nn.Module):
             # with a velocity-parametrised run's (about a third of it); compare the angles.
             target = (1.0 - t).unsqueeze(-1) * relative_log(r0, r1, self.algebra)
             loss = (b_hat - target).pow(2).sum(-1).mean()
+        elif self.x1_loss == "velocity":
+            # The reference loss |b_hat / (1 - t) - v|^2 on the x1 output, so the network's
+            # output is the only difference from flow_param="velocity". Written as the tangent
+            # residual times 1 / (1 - t)^2, with that weight capped beyond the last sampler
+            # step: there the target stays the true remaining displacement (1 - t) v.
+            b_hat = self._field(rt, t, cond_mv)
+            one_minus_t = (1.0 - t).unsqueeze(-1)
+            target = one_minus_t * relative_log(r0, r1, self.algebra)
+            weight = one_minus_t.clamp(min=_X1_LOSS_FLOOR).pow(-2)
+            loss = (weight * (b_hat - target).pow(2)).sum(-1).mean()
         else:
             b_hat = self._field(rt, t, cond_mv)
             r1_hat = rotor_multiply(rt, exp_map(b_hat), self.algebra)

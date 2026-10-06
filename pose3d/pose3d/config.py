@@ -246,7 +246,9 @@ class FlowConfig:
     # Loss for flow_param=x1. "tangent": |b_hat - (1-t) v|^2, the velocity loss reweighted by
     # (1-t)^2 (its value is ~1/3 of a velocity run's; compare the angles, not the losses).
     # "geodesic": squared geodesic distance between rt exp(b_hat) and r1, the evaluation metric.
-    x1_loss: Literal["tangent", "geodesic"] = "tangent"
+    # "velocity": the reference loss |b_hat/(1-t) - v|^2 (weight capped for 1-t < 0.05), so only
+    # the network's output parametrisation differs from flow_param=velocity.
+    x1_loss: Literal["tangent", "geodesic", "velocity"] = "tangent"
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None
