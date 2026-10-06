@@ -160,8 +160,12 @@ There is no value for the editor's "GPU T4 ×2" ([#1196](https://github.com/Kagg
 
 `--docker-image gcr.io/kaggle-private-byod/python@sha256:...` (or `NotebookSpec(docker_image=...)`)
 pins the image a previous kernel ran on (`kaggle kernels pull -m` shows it as `docker_image`).
-Do this for no-internet runs that install version-specific wheels, such as the `cp312` healpy in
-`ga-research-offline-deps`: Kaggle's default image moves, its Python may not.
+Do this for every no-internet push of a **new** kernel: on 2026-10-06 three fresh T4 kernels pushed
+without it got `docker_image: ""` in their metadata and went `running` -> `error` within minutes with
+an empty log (no cell ran); the same notebook with the image pinned trained normally. The pin is
+kept across versions of a kernel (`docker_image_pinning_type: original`), so a kernel that was once
+pushed with it keeps working without the flag. It also fixes the image's Python for the `cp312`
+wheels in `ga-research-offline-deps`.
 
 ## Secrets are per-account and cannot be provisioned via the API
 
