@@ -18,6 +18,7 @@ from pose3d.geometry.flow import (
     geodesic_distance,
     geodesic_interpolate,
     relative_log,
+    rotor_conjugate,
     rotor_multiply,
 )
 from pose3d.geometry.rotor import embed_rotor, matrix_to_rotor, random_rotor, rotor_to_matrix
@@ -39,8 +40,14 @@ class ImageToMultivectors(nn.Module):
                  depth_anything_model: str = DEPTH_ANYTHING_DEFAULT,
                  freeze_backbone: bool = False,
                  adapter_channels: int = 256,
-                 conv_adapter: bool = True):
+                 conv_adapter: bool = True,
+                 cond_tokens: str = "pooled",
+                 so2_channels: int = 128):
         super().__init__()
+        if cond_tokens not in ("pooled", "so2"):
+            raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
+        if cond_tokens == "so2" and conv_adapter:
+            raise ValueError("cond_tokens='so2' replaces the pooling, so it needs conv_adapter=False")
         if not is_dense_backbone(encoder_type):
             # The conv adapter is sized from a deep backbone's channel count; the
             # GA encoders emit a handful of channels at full resolution instead.
@@ -61,6 +68,15 @@ class ImageToMultivectors(nn.Module):
         backbone_channels = self.backbone.output_shape[0]
 
         self.use_conv_adapter = bool(conv_adapter)
+        self.cond_tokens = cond_tokens
+        if cond_tokens == "so2":
+            # Same token count as the pooled reshape (2048 -> 256), but built so that the vector
+            # parts rotate with the image (see models/so2_head.py). Assumes a 224 input (7x7 map).
+            from pose3d.models.so2_head import SO2ConditionHead
+            self.n_mv = backbone_channels // mv_dim
+            self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
+                                                 channels=so2_channels)
+            return
         if not self.use_conv_adapter:
             # No adapter: the globally pooled backbone vector is cut into consecutive
             # groups of mv_dim channels, one multivector each (2048 -> 256 for ResNet-50/101),
@@ -100,6 +116,8 @@ class ImageToMultivectors(nn.Module):
         else:
             fmap = self.backbone(x)
         adapted = self.conv_adapter(fmap)
+        if self.cond_tokens == "so2":
+            return adapted
         if not self.use_conv_adapter:
             return adapted.flatten(1).view(adapted.shape[0], self.n_mv, self.mv_dim)
         return adapted.flatten(2).transpose(1, 2)
@@ -160,8 +178,17 @@ class CliffordFlow(nn.Module):
                  vector_field: str = "clifford",
                  condition_head: str = "clifford",
                  gatr: dict = None,
-                 fisher_checkpoint: str = None):
+                 fisher_checkpoint: str = None,
+                 cond_tokens: str = "pooled",
+                 so2_channels: int = 128,
+                 pose_tokens: str = "rotor"):
         super().__init__()
+        if pose_tokens not in ("rotor", "frame"):
+            raise ValueError(f"pose_tokens must be 'rotor' or 'frame', got {pose_tokens!r}")
+        if pose_tokens == "frame" and (vector_field != "gatr" or mlp_heads):
+            raise ValueError("pose_tokens='frame' needs the GATr vector field (and no mlp_heads)")
+        if cond_tokens != "pooled" and fisher_checkpoint:
+            raise ValueError("cond_tokens='so2' and fisher_prior cannot be combined")
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
         if vector_field not in ("clifford", "gatr"):
@@ -176,6 +203,7 @@ class CliffordFlow(nn.Module):
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
         self.mlp_heads = mlp_heads
+        self.pose_tokens = pose_tokens
         mv_dim = int(2**algebra.dim)
         vf_hidden_dim = hidden_dim if vector_field_hidden_dim is None else vector_field_hidden_dim
 
@@ -200,7 +228,7 @@ class CliffordFlow(nn.Module):
                 algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone,
                 encoder_type=encoder_type, depth_anything_model=depth_anything_model,
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels,
-                conv_adapter=conv_adapter)
+                conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels)
             cond_in_features = self.adapter.n_mv
 
         if condition_head == "gatr":
@@ -213,7 +241,8 @@ class CliffordFlow(nn.Module):
                 out_features=self.n_cond_mv)
         if vector_field == "gatr":
             from pose3d.models.gatr_denoiser import GATrVectorField
-            self.vector_field = GATrVectorField(self.n_cond_mv, **(gatr or {}))
+            self.vector_field = GATrVectorField(
+                self.n_cond_mv, n_pose_tokens=3 if pose_tokens == "frame" else 1, **(gatr or {}))
         else:
             self.vector_field = TralaleroTralala(
                 algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1)
@@ -257,11 +286,31 @@ class CliffordFlow(nn.Module):
         return cond_mv
 
     def velocity(self, rotor, t, cond_mv):
-        rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
         t_mv = self.algebra.embed(t.reshape(-1, 1), (0,)).unsqueeze(1)
+        if self.pose_tokens == "frame":
+            return self._frame_velocity(rotor, t_mv, cond_mv)
+        rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
         inp = torch.cat([rotor_mv, t_mv, cond_mv], dim=1)
         out = self.vector_field(inp)[:, 0]
         return self.algebra.get_grade(out, 2)
+
+    def _frame_velocity(self, rotor, t_mv, cond_mv):
+        """Pose in as the frame R e1, R e2, R e3, velocity out in the camera frame.
+
+        GATr acts on every token by the sandwich g x g~. On a rotor token that is conjugation,
+        R -> G R G^T, while a camera rotation acts on the pose as R -> G R; with condition tokens
+        that really rotate (cond_tokens='so2') the two would disagree. The columns of R are vectors
+        that do go to G R e_i, and the spatial velocity w = r v r~ goes to G w, so the network's
+        symmetry matches the physical one. The body velocity v = r~ w r is returned, as before.
+        """
+        frame = rotor_to_matrix(rotor, self.algebra).transpose(-1, -2)   # rows: R e1, R e2, R e3
+        frame_mv = self.algebra.embed(frame, (1, 2, 3))
+        inp = torch.cat([frame_mv, t_mv, cond_mv], dim=1)
+        spatial = self.algebra.get_grade(self.vector_field(inp)[:, 0], 2)  # e12, e13, e23
+        spatial_rotor = torch.cat([torch.zeros_like(spatial[..., :1]), spatial], dim=-1)
+        body = rotor_multiply(rotor_multiply(rotor_conjugate(rotor, self.algebra), spatial_rotor,
+                                             self.algebra), rotor, self.algebra)
+        return body[..., 1:]
 
     def forward(self, x, rotor, t, cls=None):
         return self.velocity(rotor, t, self.condition(x, cls))

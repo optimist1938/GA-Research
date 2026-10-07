@@ -65,15 +65,20 @@ class GATrVectorField(nn.Module):
     Token 0 carries the noisy rotor R_t, tokens 1.. the conditioning multivectors (token 1 is
     the time embedding, which the flow builds as a scalar multivector). Scalar channels tell the
     tokens apart: the time t, broadcast to every token, and a query flag that is 1 on token 0.
+    With n_pose_tokens=3 the pose is the frame R e1, R e2, R e3 on tokens 0-2 (time on token 3),
+    each with its own flag so the network knows which axis is which.
     """
 
     def __init__(self, n_cond_mv: int, mv_channels: int = 8, s_channels: int = 32,
-                 num_blocks: int = 4, num_heads: int = 4):
+                 num_blocks: int = 4, num_heads: int = 4, n_pose_tokens: int = 1):
         super().__init__()
+        # 1: the rotor token; 3: the frame R e1, R e2, R e3 (CliffordFlow pose_tokens='frame').
+        # The time token follows the pose tokens; the query flag and the read-out stay on token 0.
+        self.n_pose_tokens = n_pose_tokens
         GATr = _import_gatr()
         self.net = GATr(
             in_mv_channels=1, out_mv_channels=1, hidden_mv_channels=mv_channels,
-            in_s_channels=2, out_s_channels=None, hidden_s_channels=s_channels,
+            in_s_channels=1 + n_pose_tokens, out_s_channels=None, hidden_s_channels=s_channels,
             attention={"num_heads": num_heads}, mlp={}, num_blocks=num_blocks,
         )
         self.register_buffer("_pga_index", torch.tensor(_PGA_INDEX), persistent=False)
@@ -84,9 +89,10 @@ class GATrVectorField(nn.Module):
         b, n, _ = x.shape
         pga = x.new_zeros(b, n, 16)
         pga[..., self._pga_index] = x
-        scalars = x.new_zeros(b, n, 2)
-        scalars[..., 0] = x[:, 1, 0].unsqueeze(1)  # t: the scalar part of token 1
-        scalars[:, 0, 1] = 1.0
+        scalars = x.new_zeros(b, n, 1 + self.n_pose_tokens)
+        scalars[..., 0] = x[:, self.n_pose_tokens, 0].unsqueeze(1)  # t: scalar part of the time token
+        for i in range(self.n_pose_tokens):
+            scalars[:, i, 1 + i] = 1.0
         out_mv, _ = self.net(pga.unsqueeze(2), scalars=scalars)  # (B, n, 1, 16)
         query = out_mv[:, 0, 0]  # (B, 16)
         result = x.new_zeros(b, 1, x.shape[-1])

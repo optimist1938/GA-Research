@@ -248,6 +248,20 @@ class FlowConfig:
     # multivectors): "gatr" runs GATr over the backbone tokens plus n_cond_mv learned queries.
     # Shares the gatr_* sizes with the vector field. Not with mlp_heads or fisher_prior.
     condition_head: Literal["clifford", "gatr"] = "clifford"
+    # How the backbone map becomes the condition head's 256 input multivectors. "pooled": global
+    # average pool, then 8 consecutive channels are declared one multivector (the 8.95 deg
+    # recipe), so the "vectors" do not rotate with the image. "so2": keep the 7x7 map, feature
+    # channels stay scalars and the vector / bivector parts are feature-weighted sums of each
+    # cell's in-plane direction from the image centre, plus a constant optical-axis (e3) token:
+    # rotating the image by 90 deg rotates every token about e3 exactly (models/so2_head.py).
+    # Without conv_adapter, fisher_prior. so2_channels = width of its first 1x1 conv.
+    cond_tokens: Literal["pooled", "so2"] = "pooled"
+    so2_channels: int = 128
+    # How the GATr vector field sees the current pose. "rotor": one rotor token, which GATr's
+    # sandwich action conjugates (R -> G R G^T), unlike a camera rotation (R -> G R).
+    # "frame": three vector tokens R e1, R e2, R e3, with the velocity read out in the camera
+    # frame, so GATr's symmetry is the physical one. Pairs with cond_tokens=so2; GATr only.
+    pose_tokens: Literal["rotor", "frame"] = "rotor"
     gatr_blocks: int = 4
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token
