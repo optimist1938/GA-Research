@@ -24,6 +24,7 @@ import torch.nn as nn
 #   1, e1, e2, e3, e12, e13, e23, e123  ->  1, e1..e3 (2-4), e12..e23 (8-10), e123 (14)
 _PGA_INDEX = (0, 2, 3, 4, 8, 9, 10, 14)
 _ROTATION_BIVECTOR = (8, 9, 10)  # e12, e13, e23 within the 16 PGA blades
+_VECTOR = (2, 3, 4)              # e1, e2, e3 within the 16 PGA blades
 
 
 def _ensure_xformers_stub():
@@ -83,6 +84,7 @@ class GATrVectorField(nn.Module):
         )
         self.register_buffer("_pga_index", torch.tensor(_PGA_INDEX), persistent=False)
         self.register_buffer("_rot_index", torch.tensor(_ROTATION_BIVECTOR), persistent=False)
+        self.register_buffer("_vec_index", torch.tensor(_VECTOR), persistent=False)
         self.out = self.net.linear_out  # zeroed by CliffordFlow so the initial velocity is 0
 
     def forward(self, x):
@@ -96,7 +98,15 @@ class GATrVectorField(nn.Module):
         out_mv, _ = self.net(pga.unsqueeze(2), scalars=scalars)  # (B, n, 1, 16)
         query = out_mv[:, 0, 0]  # (B, 16)
         result = x.new_zeros(b, 1, x.shape[-1])
-        result[:, 0, 4:7] = query[:, self._rot_index]  # e12, e13, e23 of Cl(3,0)
+        if self.n_pose_tokens == 1:
+            result[:, 0, 4:7] = query[:, self._rot_index]  # e12, e13, e23 of Cl(3,0)
+        else:
+            # Frame tokens carry no bivector part, so at the zero-initialised read-out a bivector
+            # read-out sees almost no signal and training stalls at a saddle. Read the vector part
+            # instead (token 0 is R e1 itself) and take its dual e123 w, still a bivector under
+            # rotations: e12 = w3, e13 = -w2, e23 = w1.
+            w = query[:, self._vec_index]
+            result[:, 0, 4:7] = torch.stack([w[:, 2], -w[:, 1], w[:, 0]], dim=-1)
         return result
 
 

@@ -23,6 +23,10 @@ Axes follow the pose labels' camera frame (checked on the warp pipeline): e1 = i
 counter-clockwise turn on screen, maps a pose label R to R_z(-90 deg) R, and the tokens turn the
 same way.
 
+The image tokens are divided by their root-mean-square norm (a rotation invariant, so this keeps
+the equivariance) and scaled by a learned gain; without it they start ~60x smaller than the pooled
+ResNet tokens, which stalled the first training run for 7 epochs.
+
 A final constant e3 token tells the downstream E(3)-equivariant heads which axis is the optical one,
 reducing their symmetry to rotations about it.
 """
@@ -62,6 +66,9 @@ class SO2ConditionHead(nn.Module):
         self.register_buffer("direction", torch.stack([u, v], -1) / norm, persistent=False)
         n_radii = int(self.ridx.max()) + 1
         self.radial = nn.Parameter(torch.full((6 * self.k, n_radii), 1.0 / grid**2))
+        # Learned output scale (a scalar, so rotation invariant). 2 ~ the norm of an 8-channel group of
+        # pooled pretrained ResNet features, the tokens this head replaces.
+        self.gain = nn.Parameter(torch.tensor(2.0))
 
     def forward(self, fmap):
         b, _, h, w = fmap.shape
@@ -70,9 +77,11 @@ class SO2ConditionHead(nn.Module):
         weights = self.maps(self.reduce(fmap)).flatten(2)                # (B, 6k, cells)
         weights = (weights * self.radial[:, self.ridx]).view(b, self.k, 6, -1)
         direction = self.direction.to(fmap.dtype)
-        mv = fmap.new_zeros(b, self.k + 1, 8)
-        mv[:, :-1, list(self._INVARIANT)] = weights[:, :, :4].sum(-1)
-        mv[:, :-1, list(self._VECTOR)] = weights[:, :, 4] @ direction
-        mv[:, :-1, list(self._BIVECTOR)] = weights[:, :, 5] @ direction
-        mv[:, -1, 3] = 1.0                                               # the optical axis e3
-        return mv
+        tokens = fmap.new_zeros(b, self.k, 8)
+        tokens[..., list(self._INVARIANT)] = weights[:, :, :4].sum(-1)
+        tokens[..., list(self._VECTOR)] = weights[:, :, 4] @ direction
+        tokens[..., list(self._BIVECTOR)] = weights[:, :, 5] @ direction
+        rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()   # (B, 1)
+        axis = fmap.new_zeros(b, 1, 8)
+        axis[..., 3] = 1.0                                                     # the optical axis e3
+        return torch.cat([self.gain * tokens / rms.unsqueeze(-1), axis], dim=1)
