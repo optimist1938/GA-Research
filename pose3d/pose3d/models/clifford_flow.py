@@ -42,7 +42,8 @@ class ImageToMultivectors(nn.Module):
                  adapter_channels: int = 256,
                  conv_adapter: bool = True,
                  cond_tokens: str = "pooled",
-                 so2_channels: int = 128):
+                 so2_channels: int = 128,
+                 so2_up_token: bool = False):
         super().__init__()
         if cond_tokens not in ("pooled", "so2"):
             raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
@@ -75,7 +76,7 @@ class ImageToMultivectors(nn.Module):
             from pose3d.models.so2_head import SO2ConditionHead
             self.n_mv = backbone_channels // mv_dim
             self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
-                                                 channels=so2_channels)
+                                                 channels=so2_channels, up_token=so2_up_token)
             return
         if not self.use_conv_adapter:
             # No adapter: the globally pooled backbone vector is cut into consecutive
@@ -181,6 +182,7 @@ class CliffordFlow(nn.Module):
                  fisher_checkpoint: str = None,
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
+                 so2_up_token: bool = False,
                  pose_tokens: str = "rotor"):
         super().__init__()
         if pose_tokens not in ("rotor", "frame"):
@@ -228,7 +230,8 @@ class CliffordFlow(nn.Module):
                 algebra, grid=adapter_grid, pretrained_backbone=pretrained_backbone,
                 encoder_type=encoder_type, depth_anything_model=depth_anything_model,
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels,
-                conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels)
+                conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels,
+                so2_up_token=so2_up_token)
             cond_in_features = self.adapter.n_mv
 
         if condition_head == "gatr":

@@ -29,6 +29,12 @@ ResNet tokens, which stalled the first training run for 7 epochs.
 
 A final constant e3 token tells the downstream E(3)-equivariant heads which axis is the optical one,
 reducing their symmetry to rotations about it.
+
+up_token=True adds one more constant token, -e2 (the image's up direction in the label camera frame),
+and so breaks that last SO(2) on purpose: Pascal3D photos are nearly always upright, and with only
+image-derived in-plane vectors the model has no in-plane reference until it learns to extract one
+(the 17-epoch plateau of clifford_flow_gatr_so2_frame_v2). The image tokens themselves still rotate
+with the image.
 """
 
 import torch
@@ -38,7 +44,8 @@ import torch.nn as nn
 class SO2ConditionHead(nn.Module):
     """(B, c_in, grid, grid) scalar field -> (B, n_out, 8) Cl(3,0) multivectors.
 
-    The first n_out - 1 tokens come from the feature map, the last is the constant e3 axis.
+    The first tokens come from the feature map, then the constant e3 axis (and with up_token the
+    constant -e2 image-up direction), n_out in total.
     Blade order 1, e1, e2, e3, e12, e13, e23, e123 (the clifford package's, see gatr_denoiser).
     """
 
@@ -46,13 +53,16 @@ class SO2ConditionHead(nn.Module):
     _VECTOR = (1, 2)           # e1, e2
     _BIVECTOR = (5, 6)         # e13, e23 = n ^ e3
 
-    def __init__(self, c_in: int = 2048, n_out: int = 256, channels: int = 128, grid: int = 7):
+    def __init__(self, c_in: int = 2048, n_out: int = 256, channels: int = 128, grid: int = 7,
+                 up_token: bool = False):
         super().__init__()
-        if n_out < 2:
-            raise ValueError("n_out must leave room for at least one image token besides the axis")
+        self.up_token = bool(up_token)
+        n_const = 2 if self.up_token else 1
+        if n_out <= n_const:
+            raise ValueError("n_out must leave room for at least one image token besides the constants")
         if grid % 2 == 0:
             raise ValueError("grid must be odd so the centre cell sits on the rotation axis")
-        self.k = n_out - 1
+        self.k = n_out - n_const
         self.grid = grid
         self.reduce = nn.Sequential(nn.Conv2d(c_in, channels, 1), nn.GELU())
         self.maps = nn.Conv2d(channels, 6 * self.k, 1)   # 4 invariant + vector + bivector weights
@@ -82,6 +92,8 @@ class SO2ConditionHead(nn.Module):
         tokens[..., list(self._VECTOR)] = weights[:, :, 4] @ direction
         tokens[..., list(self._BIVECTOR)] = weights[:, :, 5] @ direction
         rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()   # (B, 1)
-        axis = fmap.new_zeros(b, 1, 8)
-        axis[..., 3] = 1.0                                                     # the optical axis e3
-        return torch.cat([self.gain * tokens / rms.unsqueeze(-1), axis], dim=1)
+        const = fmap.new_zeros(b, 2 if self.up_token else 1, 8)
+        const[:, 0, 3] = 1.0                                                   # the optical axis e3
+        if self.up_token:
+            const[:, 1, 2] = -1.0                                              # image up: -e2 (e2 = rows, down)
+        return torch.cat([self.gain * tokens / rms.unsqueeze(-1), const], dim=1)

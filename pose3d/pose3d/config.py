@@ -257,6 +257,10 @@ class FlowConfig:
     # Without conv_adapter, fisher_prior. so2_channels = width of its first 1x1 conv.
     cond_tokens: Literal["pooled", "so2"] = "pooled"
     so2_channels: int = 128
+    # With cond_tokens=so2: also feed a constant image-up token (-e2). Breaks the in-plane SO(2) on
+    # purpose (Pascal3D photos are upright) so the model has an in-plane reference from step one;
+    # without it v2 sat 17 epochs at ~100 deg before learning one from the image.
+    so2_up_token: bool = False
     # How the GATr vector field sees the current pose. "rotor": one rotor token, which GATr's
     # sandwich action conjugates (R -> G R G^T), unlike a camera rotation (R -> G R).
     # "frame": three vector tokens R e1, R e2, R e3, with the velocity read out in the camera

@@ -38,6 +38,7 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         fisher_checkpoint=fl.fisher_checkpoint if f.fisher_prior else None,
         cond_tokens=fl.cond_tokens,
         so2_channels=fl.so2_channels,
+        so2_up_token=fl.so2_up_token,
         pose_tokens=fl.pose_tokens,
     )
 

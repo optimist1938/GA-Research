@@ -37,6 +37,25 @@ def test_head_tokens_rotate_with_the_map():
     torch.testing.assert_close(mv[:, -1], axis.expand(3, 8))
 
 
+def test_up_token_is_constant_and_image_tokens_still_rotate():
+    torch.manual_seed(0)
+    head = SO2ConditionHead(c_in=32, n_out=9, channels=16, up_token=True).double()
+    with torch.no_grad():
+        head.radial.normal_()
+    fmap = torch.randn(3, 32, 7, 7, dtype=torch.float64)
+    mv, mv_rot = head(fmap), head(_rot90(fmap))
+    assert mv.shape == (3, 9, 8)
+    r2 = R_Z_MINUS_90[:2, :2]
+    img, img_rot = mv[:, :-2], mv_rot[:, :-2]
+    torch.testing.assert_close(img_rot[..., [1, 2]], img[..., [1, 2]] @ r2.T)
+    torch.testing.assert_close(img_rot[..., [0, 3, 4, 7]], img[..., [0, 3, 4, 7]])
+    axis, up = torch.zeros(8, dtype=torch.float64), torch.zeros(8, dtype=torch.float64)
+    axis[3], up[2] = 1.0, -1.0
+    torch.testing.assert_close(mv[:, -2], axis.expand(3, 8))
+    torch.testing.assert_close(mv[:, -1], up.expand(3, 8))          # does not turn with the image
+    torch.testing.assert_close(mv_rot[:, -1], up.expand(3, 8))
+
+
 def test_head_rejects_a_wrong_map_size():
     with pytest.raises(ValueError):
         SO2ConditionHead(c_in=8, n_out=4, channels=4)(torch.randn(1, 8, 5, 5))
