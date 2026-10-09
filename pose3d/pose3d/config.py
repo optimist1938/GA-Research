@@ -241,7 +241,12 @@ class FlowConfig:
     # cell's in-plane direction from the image centre, plus a constant optical-axis (e3) token:
     # rotating the image by 90 deg rotates every token about e3 exactly (models/so2_head.py).
     # Without conv_adapter, fisher_prior. so2_channels = width of its first 1x1 conv.
-    cond_tokens: Literal["pooled", "so2"] = "pooled"
+    # "c4lift": the backbone runs on the four 90-degree turns of the image (one batch, 4x the
+    # backbone cost) and a harmonic head writes C4 frequencies 0 / 1 into the invariant /
+    # (e1, e2), (e13, e23) slots: turning the image by 90 deg turns every token exactly, and the
+    # turned views give the in-plane 'up' from the content (models/c4_lift.py). Pairs with
+    # pose_tokens=frame; no so2_up_token.
+    cond_tokens: Literal["pooled", "so2", "c4lift"] = "pooled"
     so2_channels: int = 128
     # With cond_tokens=so2: also feed a constant image-up token (-e2). Breaks the in-plane SO(2) on
     # purpose (Pascal3D photos are upright) so the model has an in-plane reference from step one;
@@ -268,6 +273,11 @@ class FlowConfig:
     # describe the same architecture as the checkpoint.
     reflow_teacher: Optional[str] = None
     reflow_steps: int = 20   # Euler steps the teacher takes to produce each coupling
+    # "strict": the student is the teacher's architecture and starts from all its weights.
+    # "partial": a different student (cond_tokens=c4lift, pose_tokens=frame, ...) takes every
+    # tensor whose name and shape match; the rest start fresh at fresh_lr_mult x the lr.
+    reflow_init: Literal["strict", "partial"] = "strict"
+    fresh_lr_mult: float = 1.0
 
 
 @dataclass

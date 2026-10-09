@@ -82,12 +82,35 @@ def attach_reflow_teacher(model, cfg: Config):
 
     checkpoint = torch.load(cfg.flow.reflow_teacher, map_location="cpu", weights_only=False)
     teacher, _ = build_saved_model(checkpoint, cfg.device)
-    # Strict: the run's flags have to rebuild the teacher's architecture.
-    model.load_state_dict(checkpoint["model"])
+    if cfg.flow.reflow_init == "strict":
+        # The run's flags have to rebuild the teacher's architecture.
+        model.load_state_dict(checkpoint["model"])
+        model._fresh_params = set()
+    else:
+        # A different student (e.g. cond_tokens=c4lift, pose_tokens=frame): copy every tensor whose
+        # name and shape match, leave the rest at their initialisation.
+        own = model.state_dict()
+        shared = {k: v for k, v in checkpoint["model"].items() if k in own and own[k].shape == v.shape}
+        model.load_state_dict(shared, strict=False)
+        model._fresh_params = {n for n, _ in model.named_parameters() if n not in shared}
+        print(f"Reflow partial init: {len(shared)} / {len(own)} tensors from the teacher; "
+              f"fresh parameters: {sorted(model._fresh_params)}")
     model.set_reflow_teacher(teacher, cfg.flow.reflow_steps)
     print(f"Reflow: initialised from and trained on the couplings of {cfg.flow.reflow_teacher} "
           f"({cfg.flow.reflow_steps} teacher steps)")
     return model
+
+
+def param_groups(model, cfg: Config):
+    """One group, or with a partial reflow init two: the parameters the teacher did not provide
+    train at fresh_lr_mult x the learning rate (they start from scratch while the rest fine-tune)."""
+    fresh = getattr(model, "_fresh_params", set())
+    mult = cfg.flow.fresh_lr_mult
+    if not fresh or mult == 1.0:
+        return [{"params": [p for p in model.parameters()]}]
+    named = list(model.named_parameters())
+    return [{"params": [p for n, p in named if n not in fresh]},
+            {"params": [p for n, p in named if n in fresh], "lr": cfg.effective_lr * mult}]
 
 
 def instantiate(cfg: Config):
@@ -104,7 +127,7 @@ def instantiate(cfg: Config):
         model = attach_reflow_teacher(model, cfg)
     model = distributed.convert_sync_bn(model, cfg)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.effective_lr)
+    optimizer = torch.optim.AdamW(param_groups(model, cfg), lr=cfg.effective_lr)
     scheduler = build_scheduler(optimizer, cfg)
     criterion = build_criterion(cfg)
 

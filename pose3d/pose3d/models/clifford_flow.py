@@ -46,10 +46,10 @@ class ImageToMultivectors(nn.Module):
                  so2_channels: int = 128,
                  so2_up_token: bool = False):
         super().__init__()
-        if cond_tokens not in ("pooled", "so2"):
-            raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
-        if cond_tokens == "so2" and conv_adapter:
-            raise ValueError("cond_tokens='so2' replaces the pooling, so it needs conv_adapter=False")
+        if cond_tokens not in ("pooled", "so2", "c4lift"):
+            raise ValueError(f"cond_tokens must be 'pooled', 'so2' or 'c4lift', got {cond_tokens!r}")
+        if cond_tokens != "pooled" and conv_adapter:
+            raise ValueError(f"cond_tokens={cond_tokens!r} replaces the pooling, so it needs conv_adapter=False")
         if not is_dense_backbone(encoder_type):
             # The conv adapter is sized from a deep backbone's channel count; the
             # GA encoders emit a handful of channels at full resolution instead.
@@ -78,6 +78,15 @@ class ImageToMultivectors(nn.Module):
             self.n_mv = backbone_channels // mv_dim
             self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
                                                  channels=so2_channels, up_token=so2_up_token)
+            return
+        if cond_tokens == "c4lift":
+            # The backbone runs on the four 90-degree turns of the image and a harmonic head maps
+            # the lifted maps to tokens that turn with the image exactly (models/c4_lift.py).
+            if so2_up_token:
+                raise ValueError("so2_up_token would break the exact C4 equivariance of c4lift")
+            from pose3d.models.c4_lift import C4HarmonicHead
+            self.n_mv = backbone_channels // mv_dim
+            self.conv_adapter = C4HarmonicHead(backbone_channels, n_out=self.n_mv, channels=so2_channels)
             return
         if not self.use_conv_adapter:
             # No adapter: the globally pooled backbone vector is cut into consecutive
@@ -112,13 +121,17 @@ class ImageToMultivectors(nn.Module):
         return self
 
     def forward(self, x):
+        backbone = self.backbone
+        if self.cond_tokens == "c4lift":
+            from pose3d.models.c4_lift import c4_lift
+            backbone = lambda img: c4_lift(self.backbone, img)  # noqa: E731
         if self.frozen_backbone:
             with torch.no_grad():
-                fmap = self.backbone(x)
+                fmap = backbone(x)
         else:
-            fmap = self.backbone(x)
+            fmap = backbone(x)
         adapted = self.conv_adapter(fmap)
-        if self.cond_tokens == "so2":
+        if self.cond_tokens in ("so2", "c4lift"):
             return adapted
         if not self.use_conv_adapter:
             return adapted.flatten(1).view(adapted.shape[0], self.n_mv, self.mv_dim)
@@ -206,7 +219,7 @@ class CliffordFlow(nn.Module):
         if pose_tokens == "frame" and (vector_field != "gatr" or mlp_heads):
             raise ValueError("pose_tokens='frame' needs the GATr vector field (and no mlp_heads)")
         if cond_tokens != "pooled" and fisher_checkpoint:
-            raise ValueError("cond_tokens='so2' and fisher_prior cannot be combined")
+            raise ValueError(f"cond_tokens={cond_tokens!r} and fisher_prior cannot be combined")
         if mlp_heads and fisher_checkpoint:
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
         if vector_field not in ("clifford", "gatr"):

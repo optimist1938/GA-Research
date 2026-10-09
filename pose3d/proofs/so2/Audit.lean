@@ -1,0 +1,19 @@
+import So2proofs
+#print axioms So2.reynolds_equivariant
+#print axioms So2.canonicalize_equivariant
+#print axioms So2.euler_equivariant
+#print axioms So2.body_velocity_invariant
+#print axioms So2.orbit_argmax_equivariant
+#print axioms So2.Cl3.sandwich_roll
+#print axioms So2.Harmonics.lift_equivariant
+#print axioms So2.Harmonics.dft_shift
+#print axioms So2.Harmonics.freq2_to_freq1_zero
+#print axioms So2.Harmonics.rot_commutant
+#print axioms So2.Harmonics.phase_coupling
+#print axioms So2.Camera.project_roll
+#print axioms So2.Camera.roll_moves_offaxis_translation
+#print axioms So2.equivariant_error_invariant
+#print axioms So2.medoid_cost_invariant
+#print axioms So2.fixed_input_forces_symmetric_output
+#print axioms So2.Cl3.rotZ_mul
+#print axioms So2.Camera.roll_posed
