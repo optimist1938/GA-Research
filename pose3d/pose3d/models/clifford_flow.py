@@ -43,7 +43,8 @@ class ImageToMultivectors(nn.Module):
                  conv_adapter: bool = True,
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
-                 so2_up_token: bool = False):
+                 so2_up_token: bool = False,
+                 so2_split_norm: bool = False):
         super().__init__()
         if cond_tokens not in ("pooled", "so2"):
             raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
@@ -76,7 +77,8 @@ class ImageToMultivectors(nn.Module):
             from pose3d.models.so2_head import SO2ConditionHead
             self.n_mv = backbone_channels // mv_dim
             self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
-                                                 channels=so2_channels, up_token=so2_up_token)
+                                                 channels=so2_channels, up_token=so2_up_token,
+                                                 split_norm=so2_split_norm)
             return
         if not self.use_conv_adapter:
             # No adapter: the globally pooled backbone vector is cut into consecutive
@@ -183,12 +185,13 @@ class CliffordFlow(nn.Module):
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
                  so2_up_token: bool = False,
+                 so2_split_norm: bool = False,
                  pose_tokens: str = "rotor"):
         super().__init__()
-        if pose_tokens not in ("rotor", "frame"):
-            raise ValueError(f"pose_tokens must be 'rotor' or 'frame', got {pose_tokens!r}")
-        if pose_tokens == "frame" and (vector_field != "gatr" or mlp_heads):
-            raise ValueError("pose_tokens='frame' needs the GATr vector field (and no mlp_heads)")
+        if pose_tokens not in ("rotor", "frame", "frame_ch"):
+            raise ValueError(f"pose_tokens must be 'rotor', 'frame' or 'frame_ch', got {pose_tokens!r}")
+        if pose_tokens != "rotor" and (vector_field != "gatr" or mlp_heads):
+            raise ValueError(f"pose_tokens={pose_tokens!r} needs the GATr vector field (and no mlp_heads)")
         if cond_tokens != "pooled" and fisher_checkpoint:
             raise ValueError("cond_tokens='so2' and fisher_prior cannot be combined")
         if mlp_heads and fisher_checkpoint:
@@ -231,7 +234,7 @@ class CliffordFlow(nn.Module):
                 encoder_type=encoder_type, depth_anything_model=depth_anything_model,
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels,
                 conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels,
-                so2_up_token=so2_up_token)
+                so2_up_token=so2_up_token, so2_split_norm=so2_split_norm)
             cond_in_features = self.adapter.n_mv
 
         if condition_head == "gatr":
@@ -245,7 +248,8 @@ class CliffordFlow(nn.Module):
         if vector_field == "gatr":
             from pose3d.models.gatr_denoiser import GATrVectorField
             self.vector_field = GATrVectorField(
-                self.n_cond_mv, n_pose_tokens=3 if pose_tokens == "frame" else 1, **(gatr or {}))
+                self.n_cond_mv, n_pose_tokens=3 if pose_tokens == "frame" else 1,
+                pose_channels=3 if pose_tokens == "frame_ch" else 1, **(gatr or {}))
         else:
             self.vector_field = TralaleroTralala(
                 algebra, in_features=2 + self.n_cond_mv, hidden_dim=vf_hidden_dim, out_features=1)
@@ -290,7 +294,7 @@ class CliffordFlow(nn.Module):
 
     def velocity(self, rotor, t, cond_mv):
         t_mv = self.algebra.embed(t.reshape(-1, 1), (0,)).unsqueeze(1)
-        if self.pose_tokens == "frame":
+        if self.pose_tokens in ("frame", "frame_ch"):
             return self._frame_velocity(rotor, t_mv, cond_mv)
         rotor_mv = embed_rotor(rotor, self.algebra).unsqueeze(1)
         inp = torch.cat([rotor_mv, t_mv, cond_mv], dim=1)
@@ -308,7 +312,13 @@ class CliffordFlow(nn.Module):
         """
         frame = rotor_to_matrix(rotor, self.algebra).transpose(-1, -2)   # rows: R e1, R e2, R e3
         frame_mv = self.algebra.embed(frame, (1, 2, 3))
-        inp = torch.cat([frame_mv, t_mv, cond_mv], dim=1)
+        if self.pose_tokens == "frame_ch":
+            # The whole frame as 3 channels of token 0; time and condition tokens use channel 0.
+            rest = torch.cat([t_mv, cond_mv], dim=1).unsqueeze(2)                 # (B, 1 + n_cond, 1, 8)
+            rest = torch.cat([rest, rest.new_zeros(*rest.shape[:2], 2, 8)], dim=2)
+            inp = torch.cat([frame_mv.unsqueeze(1), rest], dim=1)                  # (B, 2 + n_cond, 3, 8)
+        else:
+            inp = torch.cat([frame_mv, t_mv, cond_mv], dim=1)
         spatial = self.algebra.get_grade(self.vector_field(inp)[:, 0], 2)  # e12, e13, e23
         spatial_rotor = torch.cat([torch.zeros_like(spatial[..., :1]), spatial], dim=-1)
         body = rotor_multiply(rotor_multiply(rotor_conjugate(rotor, self.algebra), spatial_rotor,

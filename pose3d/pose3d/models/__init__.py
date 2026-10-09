@@ -39,6 +39,7 @@ def _clifford_flow(cfg: Config, algebra) -> nn.Module:
         cond_tokens=fl.cond_tokens,
         so2_channels=fl.so2_channels,
         so2_up_token=fl.so2_up_token,
+        so2_split_norm=fl.so2_split_norm,
         pose_tokens=fl.pose_tokens,
     )
 

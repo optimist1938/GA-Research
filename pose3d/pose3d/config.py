@@ -261,11 +261,17 @@ class FlowConfig:
     # purpose (Pascal3D photos are upright) so the model has an in-plane reference from step one;
     # without it v2 sat 17 epochs at ~100 deg before learning one from the image.
     so2_up_token: bool = False
+    # With cond_tokens=so2: normalise the invariant and the directional slots separately (own gains),
+    # so the directional ones do not start ~20x smaller and the conditioning is not invariant at init.
+    so2_split_norm: bool = False
     # How the GATr vector field sees the current pose. "rotor": one rotor token, which GATr's
     # sandwich action conjugates (R -> G R G^T), unlike a camera rotation (R -> G R).
     # "frame": three vector tokens R e1, R e2, R e3, with the velocity read out in the camera
     # frame, so GATr's symmetry is the physical one. Pairs with cond_tokens=so2; GATr only.
-    pose_tokens: Literal["rotor", "frame"] = "rotor"
+    # "frame_ch": the same three vectors as three channels of ONE token, so geometric products inside
+    # that token can combine the pose with image directions from the first block (with "frame" the
+    # read-out token holds only R e1 and starts as a pose- and image-independent constant).
+    pose_tokens: Literal["rotor", "frame", "frame_ch"] = "rotor"
     gatr_blocks: int = 4
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token

@@ -30,6 +30,12 @@ ResNet tokens, which stalled the first training run for 7 epochs.
 A final constant e3 token tells the downstream E(3)-equivariant heads which axis is the optical one,
 reducing their symmetry to rotations about it.
 
+split_norm=True normalises the invariant slots (1, e3, e12, e123) and the directional slots
+(e1, e2, e13, e23) separately, each with its own learned gain. With one joint RMS the directional
+slots start ~20x smaller than the invariant ones (the n(r) sums nearly cancel), so the condition
+tokens are effectively rotation-invariant at initialisation and the frame-token flow starts at a
+symmetric saddle. Each group's RMS is rotation invariant, so the equivariance is unchanged.
+
 up_token=True adds one more constant token, -e2 (the image's up direction in the label camera frame),
 and so breaks that last SO(2) on purpose: Pascal3D photos are nearly always upright, and with only
 image-derived in-plane vectors the model has no in-plane reference until it learns to extract one
@@ -54,8 +60,9 @@ class SO2ConditionHead(nn.Module):
     _BIVECTOR = (5, 6)         # e13, e23 = n ^ e3
 
     def __init__(self, c_in: int = 2048, n_out: int = 256, channels: int = 128, grid: int = 7,
-                 up_token: bool = False):
+                 up_token: bool = False, split_norm: bool = False):
         super().__init__()
+        self.split_norm = bool(split_norm)
         self.up_token = bool(up_token)
         n_const = 2 if self.up_token else 1
         if n_out <= n_const:
@@ -79,6 +86,8 @@ class SO2ConditionHead(nn.Module):
         # Learned output scale (a scalar, so rotation invariant). 2 ~ the norm of an 8-channel group of
         # pooled pretrained ResNet features, the tokens this head replaces.
         self.gain = nn.Parameter(torch.tensor(2.0))
+        if self.split_norm:   # gain then scales the invariant group, gain_dir the directional one
+            self.gain_dir = nn.Parameter(torch.tensor(2.0))
 
     def forward(self, fmap):
         b, _, h, w = fmap.shape
@@ -91,9 +100,18 @@ class SO2ConditionHead(nn.Module):
         tokens[..., list(self._INVARIANT)] = weights[:, :, :4].sum(-1)
         tokens[..., list(self._VECTOR)] = weights[:, :, 4] @ direction
         tokens[..., list(self._BIVECTOR)] = weights[:, :, 5] @ direction
-        rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()   # (B, 1)
+        if self.split_norm:
+            inv, dirn = list(self._INVARIANT), list(self._VECTOR + self._BIVECTOR)
+            rms_inv = tokens[..., inv].pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()
+            rms_dir = tokens[..., dirn].pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()
+            scaled = torch.zeros_like(tokens)
+            scaled[..., inv] = self.gain * tokens[..., inv] / rms_inv.unsqueeze(-1)
+            scaled[..., dirn] = self.gain_dir * tokens[..., dirn] / rms_dir.unsqueeze(-1)
+        else:
+            rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()   # (B, 1)
+            scaled = self.gain * tokens / rms.unsqueeze(-1)
         const = fmap.new_zeros(b, 2 if self.up_token else 1, 8)
         const[:, 0, 3] = 1.0                                                   # the optical axis e3
         if self.up_token:
             const[:, 1, 2] = -1.0                                              # image up: -e2 (e2 = rows, down)
-        return torch.cat([self.gain * tokens / rms.unsqueeze(-1), const], dim=1)
+        return torch.cat([scaled, const], dim=1)

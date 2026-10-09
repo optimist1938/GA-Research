@@ -56,12 +56,48 @@ def test_up_token_is_constant_and_image_tokens_still_rotate():
     torch.testing.assert_close(mv_rot[:, -1], up.expand(3, 8))
 
 
+def test_split_norm_balances_directional_slots_and_keeps_equivariance():
+    torch.manual_seed(0)
+    head = SO2ConditionHead(c_in=32, n_out=9, channels=16, split_norm=True).double()
+    fmap = torch.randn(3, 32, 7, 7, dtype=torch.float64)
+    mv, mv_rot = head(fmap), head(_rot90(fmap))
+    r2 = R_Z_MINUS_90[:2, :2]
+    torch.testing.assert_close(mv_rot[..., [0, 3, 4, 7]], mv[..., [0, 3, 4, 7]])
+    torch.testing.assert_close(mv_rot[..., [1, 2]], mv[..., [1, 2]] @ r2.T)
+    torch.testing.assert_close(mv_rot[..., [5, 6]], mv[..., [5, 6]] @ r2.T)
+    img = mv[:, :-1]
+    inv = img[..., [0, 3, 4, 7]].pow(2).sum(-1).mean().sqrt()
+    dirn = img[..., [1, 2, 5, 6]].pow(2).sum(-1).mean().sqrt()
+    torch.testing.assert_close(inv, dirn, rtol=1e-3, atol=1e-6)       # both groups start at the gain
+
+
+def test_split_norm_makes_the_initial_field_depend_on_pose_and_image():
+    # The saddle the frame-token runs started from: with ~20x smaller directional slots the initial
+    # velocity barely depends on pose or image. Balancing the slots must raise that dependence a lot.
+    fmap = torch.randn(4, 2048, 7, 7, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
+    t = torch.full((4,), 0.5, dtype=torch.float64)
+    torch.manual_seed(2)
+    poses, one = random_rotor(4).double(), random_rotor(1).double().expand(4, 4)
+    spread = lambda v: ((v - v.mean(0)).norm(dim=-1).mean() / v.norm(dim=-1).mean()).item()
+
+    def spreads(split):
+        model = _flow("frame_ch", split_norm=split)
+        with torch.no_grad():
+            model.adapter.conv_adapter.radial.fill_(1 / 49)      # the real initial radial profiles
+        v_pose = _velocity_from_map(model, fmap[:1].expand(4, -1, -1, -1), poses, t)
+        v_img = _velocity_from_map(model, fmap, one, t)
+        return spread(v_pose), spread(v_img)
+
+    (p0, i0), (p1, i1) = spreads(False), spreads(True)
+    assert p1 > 3 * p0 and i1 > 3 * i0
+
+
 def test_head_rejects_a_wrong_map_size():
     with pytest.raises(ValueError):
         SO2ConditionHead(c_in=8, n_out=4, channels=4)(torch.randn(1, 8, 5, 5))
 
 
-def _flow(pose_tokens, dtype=torch.float64):
+def _flow(pose_tokens, dtype=torch.float64, split_norm=False):
     from pose3d.models.gatr_denoiser import _ensure_xformers_stub
 
     _ensure_xformers_stub()
@@ -73,7 +109,7 @@ def _flow(pose_tokens, dtype=torch.float64):
     model = CliffordFlow(CliffordAlgebra((1, 1, 1)), hidden_dim=[8], n_cond_mv=6, pretrained_backbone=False,
                          encoder_type="resnet50", conv_adapter=False, n_time_samples=2,
                          vector_field="gatr", cond_tokens="so2", so2_channels=8,
-                         pose_tokens=pose_tokens,
+                         pose_tokens=pose_tokens, so2_split_norm=split_norm,
                          gatr=dict(num_blocks=2, mv_channels=4, s_channels=8, num_heads=2)).to(dtype)
     with torch.no_grad():  # undo the zero init of the read-out and the flat radial profiles
         for p in model.vector_field.out.parameters():
@@ -87,10 +123,11 @@ def _velocity_from_map(model, fmap, rotor, t):
     return model.velocity(rotor, t, cond)
 
 
-def test_frame_velocity_is_invariant_to_rotating_image_and_pose_together():
+@pytest.mark.parametrize("pose_tokens,split_norm", [("frame", False), ("frame_ch", False), ("frame_ch", True)])
+def test_frame_velocity_is_invariant_to_rotating_image_and_pose_together(pose_tokens, split_norm):
     # Turning the image turns the true pose: R -> G R. The body-frame velocity the flow integrates
     # (r <- r exp(dt v)) must then be unchanged.
-    model = _flow("frame")
+    model = _flow(pose_tokens, split_norm=split_norm)
     fmap = torch.randn(2, 2048, 7, 7, dtype=torch.float64)
     rotor = random_rotor(2).double()
     g = matrix_to_rotor(R_Z_MINUS_90).expand(2, 4)
@@ -113,8 +150,9 @@ def test_rotor_token_breaks_that_invariance():
     assert (v_rot - v).abs().max() > 1e-4
 
 
-def test_so2_frame_flow_trains_and_samples():
-    model = _flow("frame", dtype=torch.float32).train()
+@pytest.mark.parametrize("pose_tokens", ["frame", "frame_ch"])
+def test_so2_frame_flow_trains_and_samples(pose_tokens):
+    model = _flow(pose_tokens, dtype=torch.float32, split_norm=pose_tokens == "frame_ch").train()
     img = torch.randn(2, 3, 224, 224)
     rot = torch.linalg.qr(torch.randn(2, 3, 3))[0]
     rot = rot * torch.linalg.det(rot).sign().view(-1, 1, 1)
