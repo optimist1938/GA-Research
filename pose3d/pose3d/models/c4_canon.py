@@ -39,14 +39,15 @@ class C4Canonicalized(nn.Module):
         """(B, 4, C): pooled backbone features of rot90(x, -k), k = 0..3 (one batched pass)."""
         b = x.shape[0]
         views = torch.cat([rot90(x, -k) for k in range(4)])
-        feats = self.model.adapter.backbone(views).mean((2, 3))
+        feats = self.model.adapter.backbone(views).mean((2, 3))   # 4 passes; f0 then runs a 5th
         return feats.view(4, b, -1).transpose(0, 1)
 
     def canonical_turn(self, x):
         return self.scorer(self.view_features(x)).squeeze(-1).argmax(-1)       # (B,) in 0..3
 
     def predict(self, x, cls=None, **kw):
-        c = self.canonical_turn(x)
+        """`noise`, if given, is the noise of the canonical image (it is not turned)."""
+        c = self.last_turn = self.canonical_turn(x)
         x_c = torch.stack([rot90(xi, -int(ci)) for xi, ci in zip(x, c)])
         rot_c = self.model.predict(x_c, cls, **kw)
         g = torch.stack([torch.linalg.matrix_power(G_TURN, int(ci)) for ci in c]).to(rot_c)

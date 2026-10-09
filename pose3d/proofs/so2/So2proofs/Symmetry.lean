@@ -72,6 +72,14 @@ theorem canonicalize_of_canonical (c : X → G) (f₀ : X → Y) (x : X) (hx : c
     canonicalize c f₀ x = f₀ x := by
   simp [canonicalize, hx]
 
+/-- Pointwise version, the one the argmax canonicaliser actually provides
+(`orbit_argmax_equivariant` holds only away from ties): at an input where the canonicaliser is
+equivariant for `g`, the canonicalised map is equivariant for `g`. -/
+theorem canonicalize_equivariant_at (c : X → G) (f₀ : X → Y) (g : G) (x : X)
+    (hc : c (g • x) = g * c x) : canonicalize c f₀ (g • x) = g • canonicalize c f₀ x := by
+  simp only [canonicalize, hc]
+  rw [mul_inv_rev, mul_smul (c x)⁻¹ g⁻¹, inv_smul_smul, mul_smul]
+
 end Canonicalize
 
 section Euler

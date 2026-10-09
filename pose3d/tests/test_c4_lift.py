@@ -173,14 +173,113 @@ def test_c4_canonicalized_model_is_exactly_equivariant_and_keeps_upright_predict
             torch.testing.assert_close(a, b)
 
 
-def test_partial_reflow_init_from_a_pooled_rotor_teacher(tmp_path):
-    # Variant A is trained by reflow from the 8.95 deg teacher, whose architecture differs (pooled
-    # tokens, rotor token): matching tensors are copied, the new head / first GATr layer start fresh
-    # and get their own learning rate.
+def test_turn_matrix_is_r_z_minus_90():
+    # The equivariance tests pass for any G with G^4 = I (e.g. G^T), so pin the sign separately:
+    # a counter-clockwise turn on screen (x right, y down) is R_z(-90 deg) in the camera frame,
+    # measured on the warp pipeline (probe_roll: sign -1 gives 8.05 deg at 5 deg, sign +1 13.2).
+    from pose3d.models.c4_canon import G_TURN
+
+    a = -math.pi / 2
+    r_z = torch.tensor([[math.cos(a), -math.sin(a), 0.0], [math.sin(a), math.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    torch.testing.assert_close(G_TURN, r_z, atol=1e-7, rtol=0)
+    torch.testing.assert_close(G_TURN.double(), R_Z_MINUS_90)
+    # a feature right of the centre (column offset +1) moves to the top (row offset -1) under rot90
+    m = torch.zeros(1, 1, 3, 3)
+    m[0, 0, 1, 2] = 1.0
+    assert rot90(m, 1)[0, 0, 0, 1] == 1.0
+    assert torch.allclose(G_TURN @ torch.tensor([1.0, 0.0, 0.0]), torch.tensor([0.0, -1.0, 0.0]))
+
+
+def test_eval_rotations_with_coupled_noise_gives_the_same_error_image_by_image(tmp_path, monkeypatch):
+    # The real evaluation path on a c4lift + frame checkpoint: with the noise coupled (r0 -> g r0)
+    # the error of every test image is the same at 0 and at 90/180/270 deg (Lean:
+    # equivariant_error_invariant + euler_equivariant); 45 deg is not covered by the guarantee.
+    import json
+    import sys
+
+    import numpy as np
+
+    import pose3d.eval_rotations as ev
+
+    model = _flow(dtype=torch.float32)
+    ckpt = tmp_path / "c4.pth"
+    torch.save({"model": model.state_dict(),
+                "config": {"model": {"name": "clifford_flow", "encoder": "resnet50", "pretrained_backbone": False,
+                                     "flow_hidden_dim": [8], "n_cond_mv": 6, "conv_adapter": False,
+                                     "vector_field": "gatr", "gatr_blocks": 2, "gatr_mv_channels": 4,
+                                     "gatr_s_channels": 8, "gatr_heads": 2, "cond_tokens": "c4lift",
+                                     "so2_channels": 8, "pose_tokens": "frame"}}}, ckpt)
+
+    class Fake(torch.utils.data.Dataset):
+        def __init__(self, *a, **k):
+            g = torch.Generator().manual_seed(3)
+            self.img = torch.rand(4, 3, 224, 224, generator=g)
+            self.rot = torch.linalg.qr(torch.randn(4, 3, 3, generator=g))[0]
+            self.rot = self.rot * torch.linalg.det(self.rot).sign().view(-1, 1, 1)
+
+        def __len__(self):
+            return 4
+
+        def __getitem__(self, i):
+            return dict(img=self.img[i], rot=self.rot[i], cls=torch.tensor([i % 2]))
+
+    monkeypatch.setattr(ev, "Pascal3D", Fake)
+    monkeypatch.setattr(ev, "get_available_device", lambda: torch.device("cpu"))
+    out = tmp_path / "rot.json"
+    monkeypatch.setattr(sys, "argv", ["x", "--checkpoint", str(ckpt), "--path_to_datasets", "unused",
+                                      "--batch_size", "2", "--num_workers", "0", "--steps", "2",
+                                      "--eval_samples", "3", "--angles", "0", "90", "180", "270", "45",
+                                      "--couple_noise", "--output_json", str(out)])
+    ev.main()
+    per = np.load(str(out).replace(".json", "_per_sample.npz"))
+    for deg in (90, 180, 270):
+        np.testing.assert_allclose(per[f"err_{deg}"], per["err_0"], atol=2e-2)
+    assert per["err_45"].shape == per["err_0"].shape   # runs; an untrained field barely sees the image
+    assert set(json.load(open(out))["angles"]) == {"0", "90", "180", "270", "45"}
+
+
+def test_roll_prior_resolves_the_four_way_turn_ambiguity():
+    # An exactly C4-equivariant flow on an ambiguous crop puts its samples in the four turned modes;
+    # the explicit upright prior (fitted on labels) makes the medoid pick the upright one.
+    from pose3d.models.c4_canon import G_TURN
+    from pose3d.models.clifford_flow import CliffordFlow, RollPrior
+
+    torch.manual_seed(0)
+    # labels: object z axis pointing image-up (-e2) with ~10 deg of roll jitter, random azimuth
+    az = torch.rand(400) * 2 * math.pi
+    roll = torch.randn(400) * math.radians(10)
+
+    def rz(a):
+        c, s = torch.cos(a), torch.sin(a)
+        z, o = torch.zeros_like(a), torch.ones_like(a)
+        return torch.stack([torch.stack([c, -s, z], -1), torch.stack([s, c, z], -1), torch.stack([z, z, o], -1)], -2)
+
+    to_up = torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])   # object z -> camera -e2
+    labels = rz(roll) @ to_up @ rz(az)
+    prior = RollPrior.fit(labels)
+    assert torch.allclose(prior.axis.abs(), torch.tensor([0.0, 0.0, 1.0]))
+    assert abs(prior.mu + math.pi / 2) < 0.05 and prior.kappa > 10
+
+    flow = CliffordFlow(CliffordAlgebra((1, 1, 1)), hidden_dim=[8], n_cond_mv=4, pretrained_backbone=False,
+                        encoder_type="resnet50", conv_adapter=False)
+    from pose3d.geometry.rotor import matrix_to_rotor
+    upright = labels[:1]
+    modes = torch.cat([torch.linalg.matrix_power(G_TURN, k) @ upright for k in (1, 1, 1, 2, 2, 3, 0)])
+    rotors = matrix_to_rotor(modes).unsqueeze(0)                      # (1, 7, 4): the upright mode is rarest
+    plain = flow._medoid(rotors)
+    weighted = flow._medoid(rotors, prior.weights(modes).unsqueeze(0))
+    assert not torch.allclose(plain.abs(), rotors[0, -1].abs(), atol=1e-4)
+    assert torch.allclose(weighted.abs(), rotors[0, -1].abs(), atol=1e-4)
+
+
+def test_backbone_init_from_a_pooled_rotor_teacher(tmp_path):
+    # Variant A starts from the 8.95 deg teacher's fine-tuned ResNet only: its heads were trained on
+    # inputs of another meaning (pooled tokens, a rotor token), so they start fresh with a zero
+    # read-out; the backbone and the fresh heads get separate learning rates, decided by name.
     from pose3d.config import Config
     from pose3d.models.clifford_flow import CliffordFlow
     from pose3d.models.gatr_denoiser import _ensure_xformers_stub
-    from pose3d.train import attach_reflow_teacher, param_groups
+    from pose3d.train import build_scheduler, init_from_checkpoint, param_groups
 
     _ensure_xformers_stub()
     pytest.importorskip("gatr", reason="GATr package not installed")
@@ -189,22 +288,40 @@ def test_partial_reflow_init_from_a_pooled_rotor_teacher(tmp_path):
                   conv_adapter=False, vector_field="gatr", gatr=gatr)
     torch.manual_seed(0)
     teacher = CliffordFlow(CliffordAlgebra((1, 1, 1)), **common)
+    with torch.no_grad():
+        for p in teacher.vector_field.out.parameters():
+            p.normal_()                                    # a trained teacher has a non-zero read-out
     path = tmp_path / "teacher.pth"
-    torch.save({"model": teacher.state_dict(),
-                "config": {"model": {"name": "clifford_flow", "encoder": "resnet50", "pretrained_backbone": False,
-                                     "flow_hidden_dim": [8], "n_cond_mv": 4, "conv_adapter": False,
-                                     "vector_field": "gatr", "gatr_blocks": 1, "gatr_mv_channels": 4,
-                                     "gatr_s_channels": 8, "gatr_heads": 1}}}, path)
+    torch.save({"model": teacher.state_dict()}, path)
     student = CliffordFlow(CliffordAlgebra((1, 1, 1)), cond_tokens="c4lift", so2_channels=8,
                            pose_tokens="frame", **common)
     cfg = Config()
     cfg.device = torch.device("cpu")
-    cfg.flow.reflow_teacher, cfg.flow.reflow_init, cfg.flow.fresh_lr_mult = str(path), "partial", 10.0
-    attach_reflow_teacher(student, cfg)
-    teacher_sd = teacher.state_dict()
-    own_bb = {k: v for k, v in student.state_dict().items() if k.startswith("adapter.backbone")}
+    cfg.flow.init_from, cfg.flow.init_mode, cfg.flow.backbone_lr_mult = str(path), "backbone", 0.35
+    cfg.train.n_epochs, cfg.train.warmup_epochs = 10, 1
+    init_from_checkpoint(student, cfg)
+    teacher_sd, student_sd = teacher.state_dict(), student.state_dict()
+    own_bb = {k: v for k, v in student_sd.items() if k.startswith("adapter.backbone.")}
     assert own_bb and all(torch.equal(v, teacher_sd[k]) for k, v in own_bb.items())
-    assert any(n.startswith("adapter.conv_adapter") for n in student._fresh_params)
+    assert all(p.abs().max() == 0 for p in student.vector_field.out.parameters())
+    shared_heads = [k for k in student_sd if k.startswith("condition_head.") and k in teacher_sd
+                    and student_sd[k].shape == teacher_sd[k].shape]
+    assert shared_heads and not all(torch.equal(student_sd[k], teacher_sd[k]) for k in shared_heads)
+
     groups = param_groups(student, cfg)
-    assert len(groups) == 2 and groups[1]["lr"] == cfg.effective_lr * 10.0
+    assert len(groups) == 2 and groups[0]["lr"] == pytest.approx(cfg.effective_lr * 0.35)
     assert sum(p.numel() for g in groups for p in g["params"]) == sum(p.numel() for p in student.parameters())
+    opt = torch.optim.AdamW(groups, lr=cfg.effective_lr)
+    sched = build_scheduler(opt, cfg)
+    peaks = [g["lr"] / 0.1 for g in opt.param_groups]       # warm-up starts at 10% of each peak
+    for _ in range(cfg.train.n_epochs):
+        opt.step()
+        sched.step()
+    for g, peak in zip(opt.param_groups, peaks):             # each group decays to 5% of its own peak
+        assert g["lr"] == pytest.approx(0.05 * peak)
+
+    bad = tmp_path / "bad.pth"
+    torch.save({"model": {k: v for k, v in teacher_sd.items() if not k.endswith("conv1.weight")}}, bad)
+    cfg.flow.init_from = str(bad)
+    with pytest.raises(ValueError):
+        init_from_checkpoint(student, cfg)

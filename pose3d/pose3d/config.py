@@ -273,11 +273,13 @@ class FlowConfig:
     # describe the same architecture as the checkpoint.
     reflow_teacher: Optional[str] = None
     reflow_steps: int = 20   # Euler steps the teacher takes to produce each coupling
-    # "strict": the student is the teacher's architecture and starts from all its weights.
-    # "partial": a different student (cond_tokens=c4lift, pose_tokens=frame, ...) takes every
-    # tensor whose name and shape match; the rest start fresh at fresh_lr_mult x the lr.
-    reflow_init: Literal["strict", "partial"] = "strict"
-    fresh_lr_mult: float = 1.0
+    # Start from a trained checkpoint (default with reflow: the teacher). init_mode "strict": same
+    # architecture, every weight. "backbone": only the fine-tuned ResNet (adapter.backbone.*), the
+    # heads start fresh -- for a different student (cond_tokens=c4lift, pose_tokens=frame); the
+    # backbone then trains at backbone_lr_mult x the lr, the fresh heads at the lr.
+    init_from: Optional[str] = None
+    init_mode: Literal["strict", "backbone"] = "strict"
+    backbone_lr_mult: float = 1.0
 
 
 @dataclass

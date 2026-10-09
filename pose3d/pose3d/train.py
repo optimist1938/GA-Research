@@ -1,5 +1,6 @@
 """Training entry point: `python -m pose3d --path_to_datasets=... [flags]`."""
 
+import math
 from pathlib import Path
 
 import torch
@@ -35,6 +36,15 @@ def build_scheduler(optimizer, cfg: Config):
     """Linear warmup for `warmup_epochs`, then cosine decay to 5% of the base lr."""
     warmup_epochs = cfg.train.warmup_epochs
     cosine_epochs = cfg.train.n_epochs - warmup_epochs
+    if len(optimizer.param_groups) > 1:
+        # Several groups (init_mode=backbone): the same shape as below, but as a factor of each
+        # group's own lr, so every group warms up from 10% and decays to 5% of its own peak.
+        def factor(epoch):
+            if epoch < warmup_epochs:
+                return 0.1 + 0.9 * epoch / warmup_epochs
+            progress = (epoch - warmup_epochs) / max(1, cosine_epochs)
+            return 0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
 
     cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
@@ -76,41 +86,55 @@ def log_model_size(model, run, model_cfg):
         run.config.update(sizes, allow_val_change=True)
 
 
-def attach_reflow_teacher(model, cfg: Config):
-    """--reflow_teacher: start from the checkpoint's weights and train on its couplings."""
+def init_from_checkpoint(model, cfg: Config):
+    """--init_from (or the reflow teacher): start from a trained checkpoint.
+
+    init_mode=strict: the run's flags rebuild the checkpoint's architecture; every tensor is loaded.
+    init_mode=backbone: only `adapter.backbone.*` (the fine-tuned ResNet) is loaded and every key of
+    it must match; the token head, condition head and vector field keep their fresh initialisation,
+    zero read-out included (a different student, e.g. cond_tokens=c4lift + pose_tokens=frame, whose heads would
+    receive inputs of a different meaning than the teacher's).
+    """
+    path = cfg.flow.init_from or cfg.flow.reflow_teacher
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if cfg.flow.init_mode == "strict":
+        model.load_state_dict(checkpoint["model"])
+    else:
+        own = {k for k in model.state_dict() if k.startswith(_BACKBONE)}
+        theirs = {k: v for k, v in checkpoint["model"].items() if k.startswith(_BACKBONE)}
+        if own != set(theirs):
+            raise ValueError(f"backbone keys differ from {path}: missing {sorted(own - set(theirs))[:4]}, "
+                             f"unexpected {sorted(set(theirs) - own)[:4]} (check --pretrained_backbone)")
+        model.load_state_dict(theirs, strict=False)   # heads keep their fresh init (zero read-out)
+        print(f"Initialised the backbone ({len(theirs)} tensors) from {path}; heads start fresh")
+    return checkpoint
+
+
+def attach_reflow_teacher(model, cfg: Config, checkpoint=None):
+    """--reflow_teacher: train on the checkpoint's couplings (and start from it, see init_mode)."""
     from pose3d.evaluate import build_model as build_saved_model
 
-    checkpoint = torch.load(cfg.flow.reflow_teacher, map_location="cpu", weights_only=False)
+    if checkpoint is None:
+        checkpoint = torch.load(cfg.flow.reflow_teacher, map_location="cpu", weights_only=False)
     teacher, _ = build_saved_model(checkpoint, cfg.device)
-    if cfg.flow.reflow_init == "strict":
-        # The run's flags have to rebuild the teacher's architecture.
-        model.load_state_dict(checkpoint["model"])
-        model._fresh_params = set()
-    else:
-        # A different student (e.g. cond_tokens=c4lift, pose_tokens=frame): copy every tensor whose
-        # name and shape match, leave the rest at their initialisation.
-        own = model.state_dict()
-        shared = {k: v for k, v in checkpoint["model"].items() if k in own and own[k].shape == v.shape}
-        model.load_state_dict(shared, strict=False)
-        model._fresh_params = {n for n, _ in model.named_parameters() if n not in shared}
-        print(f"Reflow partial init: {len(shared)} / {len(own)} tensors from the teacher; "
-              f"fresh parameters: {sorted(model._fresh_params)}")
     model.set_reflow_teacher(teacher, cfg.flow.reflow_steps)
-    print(f"Reflow: initialised from and trained on the couplings of {cfg.flow.reflow_teacher} "
+    print(f"Reflow: trained on the couplings of {cfg.flow.reflow_teacher} "
           f"({cfg.flow.reflow_steps} teacher steps)")
     return model
 
 
+_BACKBONE = "adapter.backbone."
+
+
 def param_groups(model, cfg: Config):
-    """One group, or with a partial reflow init two: the parameters the teacher did not provide
-    train at fresh_lr_mult x the learning rate (they start from scratch while the rest fine-tune)."""
-    fresh = getattr(model, "_fresh_params", set())
-    mult = cfg.flow.fresh_lr_mult
-    if not fresh or mult == 1.0:
-        return [{"params": [p for p in model.parameters()]}]
+    """One group, or with init_mode=backbone two: the loaded backbone at backbone_lr_mult x the lr,
+    everything else (fresh) at the lr. Decided by name, so a resumed run rebuilds the same groups."""
     named = list(model.named_parameters())
-    return [{"params": [p for n, p in named if n not in fresh]},
-            {"params": [p for n, p in named if n in fresh], "lr": cfg.effective_lr * mult}]
+    if cfg.flow.init_mode != "backbone" or cfg.flow.backbone_lr_mult == 1.0:
+        return [{"params": [p for _, p in named]}]
+    return [{"params": [p for n, p in named if n.startswith(_BACKBONE)],
+             "lr": cfg.effective_lr * cfg.flow.backbone_lr_mult},
+            {"params": [p for n, p in named if not n.startswith(_BACKBONE)]}]
 
 
 def instantiate(cfg: Config):
@@ -123,8 +147,12 @@ def instantiate(cfg: Config):
     if cfg.device is None:
         cfg.device = get_available_device()
     model.to(cfg.device)
+    checkpoint = None
+    if cfg.flow.init_from or cfg.flow.reflow_teacher:
+        checkpoint = init_from_checkpoint(model, cfg)
     if cfg.flow.reflow_teacher:
-        model = attach_reflow_teacher(model, cfg)
+        model = attach_reflow_teacher(
+            model, cfg, checkpoint if not cfg.flow.init_from else None)
     model = distributed.convert_sync_bn(model, cfg)
 
     optimizer = torch.optim.AdamW(param_groups(model, cfg), lr=cfg.effective_lr)

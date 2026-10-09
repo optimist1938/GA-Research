@@ -17,3 +17,6 @@ import So2proofs
 #print axioms So2.fixed_input_forces_symmetric_output
 #print axioms So2.Cl3.rotZ_mul
 #print axioms So2.Camera.roll_posed
+#print axioms So2.canonicalize_of_canonical
+#print axioms So2.canonicalize_equivariant_at
+#print axioms So2.Camera.roll_pose

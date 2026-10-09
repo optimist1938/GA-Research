@@ -8,12 +8,15 @@ A pinhole camera with focal length `f` and principal point `p` projects a camera
 
 * `project_roll`: rolling the scene about the optical axis by θ rotates the image about the
   principal point by the same θ (in the image axes that match the camera axes `e1`, `e2`).
-* `roll_fixes_axis_translation`: an object translation on the optical axis, `t = (0, 0, d)`, is
-  fixed by the roll, so the posed object `R P + t` rolled is `(R_z R) P + t`: the roll of the
-  image corresponds to the left multiplication `R ↦ R_z R` of the label.
-* `roll_moves_offaxis_translation`: for a translation off the axis the roll moves it unless
-  `θ ≡ 0 (mod 2π)`, so the symmetry is only exact on crops centred on the optical axis — which is
-  what the Image2Sphere warp (`_warp_to_224`, a virtual camera aimed at the box centre) produces.
+* `roll_pose`: the roll is linear, so the rolled posed object `roll (R P + t)` is the object posed
+  by `(R_z R, R_z t)`. The labels are rotations only, so the label change is `R ↦ R_z R` for **any**
+  object translation; the translation rotating too is invisible to the label.
+* What the symmetry does need is that the image is turned about the **principal point** `p`
+  (`project_roll`). The Image2Sphere warp puts the principal point at the crop centre (112, 112) in
+  skimage pixel-centre coordinates, while `torch.rot90` on a 224 grid turns about 111.5: a
+  half-pixel offset, so the pixel-level symmetry is exact up to that shift.
+* `roll_fixes_axis_translation`, `roll_moves_offaxis_translation`: the translation itself is fixed by
+  a roll iff it lies on the optical axis (only relevant for full 6-DoF labels, not for ours).
 -/
 
 namespace So2.Camera
@@ -36,6 +39,12 @@ theorem project_roll (f θ : ℝ) (p : Fin 2 → ℝ) (X : Fin 3 → ℝ) (hX : 
     project f p (roll θ X) = rot2 θ p (project f p X) := by
   funext i
   fin_cases i <;> simp [project, roll, rot2] <;> field_simp <;> ring
+
+/-- The roll is linear: rolling the posed point `Y + t` gives `roll Y + roll t`, i.e. the object
+posed by `(R_z R, R_z t)`. -/
+theorem roll_pose (θ : ℝ) (Y t : Fin 3 → ℝ) : roll θ (Y + t) = roll θ Y + roll θ t := by
+  funext i
+  fin_cases i <;> simp [roll] <;> ring
 
 /-- A translation along the optical axis is fixed by the roll. -/
 theorem roll_fixes_axis_translation (θ d : ℝ) : roll θ ![0, 0, d] = ![0, 0, d] := by

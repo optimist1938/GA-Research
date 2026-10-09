@@ -180,6 +180,47 @@ def _n_hidden_layers(hidden_dim):
     return 1 if isinstance(hidden_dim, int) else len(hidden_dim)
 
 
+class RollPrior:
+    """von Mises prior on the in-plane direction of an object axis, fitted on training labels.
+
+    For a camera-frame rotation R, psi(R) is the angle of R u (u: an object axis) projected on the
+    image plane (e1 right, e2 down). Upright photos concentrate psi; the prior is
+    pi(R) ~ exp(kappa cos(psi(R) - mu)). `fit` picks the signed object axis whose psi is most
+    concentrated on the labels (largest mean resultant length) and the MLE kappa.
+    """
+
+    def __init__(self, axis, mu, kappa):
+        self.axis = torch.as_tensor(axis, dtype=torch.float32)
+        self.mu, self.kappa = float(mu), float(kappa)
+
+    @staticmethod
+    def psi(rot, axis):
+        v = rot @ axis.to(rot)
+        return torch.atan2(v[..., 1], v[..., 0])
+
+    @classmethod
+    def fit(cls, rots):
+        best = None
+        for axis in torch.eye(3):
+            for sign in (1.0, -1.0):
+                psi = cls.psi(rots.float(), sign * axis)
+                c, s = psi.cos().mean(), psi.sin().mean()
+                r = float(torch.sqrt(c**2 + s**2))
+                if best is None or r > best[0]:
+                    best = (r, sign * axis, float(torch.atan2(s, c)))
+        r, axis, mu = best
+        # Banerjee et al. approximation of the von Mises MLE kappa from the mean resultant length
+        kappa = r * (2 - r**2) / max(1e-6, 1 - r**2)
+        return cls(axis, mu, kappa)
+
+    def weights(self, rot):
+        w = torch.exp(self.kappa * (torch.cos(self.psi(rot, self.axis) - self.mu) - 1))
+        return w / w.mean().clamp(min=1e-12)
+
+    def state(self):
+        return {"axis": self.axis.tolist(), "mu": self.mu, "kappa": self.kappa}
+
+
 class _Frozen:
     """Holds a module outside its owner's module tree.
 
@@ -418,13 +459,16 @@ class CliffordFlow(nn.Module):
             loss = loss + fisher_loss
         return loss
 
-    def _medoid(self, rotors):
+    def _medoid(self, rotors, weights=None):
         """Pick the sample closest to all the others, per batch item.
 
         The flow defines a distribution over poses, so a single draw is just one
         mode -- for symmetric objects, a randomly chosen one. The medoid under
         geodesic distance approximates the dominant mode without needing a
         density estimate.
+
+        With `weights` (B, K) (importance weights, e.g. a roll prior) the cost is the weighted sum
+        of distances, the medoid of the reweighted sample set.
 
         :param rotors: (B, K, 4)
         returns : (B, 4)
@@ -433,11 +477,20 @@ class CliffordFlow(nn.Module):
         a = rotors.unsqueeze(2).expand(b, k, k, 4).reshape(-1, 4)
         c = rotors.unsqueeze(1).expand(b, k, k, 4).reshape(-1, 4)
         dist = geodesic_distance(a, c, self.algebra).view(b, k, k)
+        if weights is not None:
+            dist = dist * weights.unsqueeze(1)
         idx = dist.sum(-1).argmin(-1)
         return rotors[torch.arange(b, device=rotors.device), idx]
 
     @torch.no_grad()
-    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = None):
+    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = None, noise=None, roll_prior=None):
+        """noise: optional starting rotors (B * n_samples, 4) instead of fresh uniform draws (lets
+        eval_rotations couple the noise of a turned image, r0 -> g r0, to test equivariance sample
+        by sample).
+
+        roll_prior: optional `RollPrior`; the n_samples draws are reweighted by it before the
+        medoid, p(R | x) ~ p_flow(R | x) pi(R): the 'cameras are held upright' prior made explicit,
+        outside an equivariant flow (which then stays exactly equivariant without it)."""
         b = x.shape[0]
         n_samples = max(1, int(n_samples))
         steps = self.sample_steps if steps is None else steps
@@ -448,7 +501,9 @@ class CliffordFlow(nn.Module):
             if fisher_a is not None:
                 fisher_a = fisher_a.repeat_interleave(n_samples, dim=0)
 
-        if fisher_a is not None:
+        if noise is not None:
+            rotor = noise.to(x.device, cond_mv.dtype)
+        elif fisher_a is not None:
             rotor = matrix_to_rotor(fisher_prior.sample_batch(fisher_a))
         else:
             rotor = random_rotor(b * n_samples).to(x.device)
@@ -456,6 +511,9 @@ class CliffordFlow(nn.Module):
         rotor = self._integrate(rotor, cond_mv, steps)
 
         if n_samples > 1:
-            rotor = self._medoid(rotor.view(b, n_samples, 4))
+            weights = None
+            if roll_prior is not None:
+                weights = roll_prior.weights(rotor_to_matrix(rotor, self.algebra)).view(b, n_samples)
+            rotor = self._medoid(rotor.view(b, n_samples, 4), weights)
 
         return rotor_to_matrix(rotor, self.algebra)
