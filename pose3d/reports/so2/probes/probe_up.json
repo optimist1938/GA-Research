@@ -1,0 +1,7 @@
+{
+ "n_train": 981,
+ "n_test": 328,
+ "canonicaliser_acc": 0.9298780487804879,
+ "c1_phase_points_up": 0.8628048780487805,
+ "upright_rank_top1": 0.9298780487804879
+}
