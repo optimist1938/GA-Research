@@ -7,7 +7,8 @@ Euler ODE integration with an optional multi-sample geodesic medoid.
 
 Experimental variants are all off by default and selected in `pose3d.config.Features`
 and `FlowConfig`: `adapter_grid`, `adapter_channels`, `conv_adapter`, `vector_field_hidden_dim`,
-`mlp_heads` and `fisher_prior`.
+`mlp_heads` and `fisher_prior`. `reflow_teacher` fine-tunes on a trained checkpoint's own
+couplings (reflow) so that a few Euler steps (`sample_steps`) suffice.
 """
 
 import torch
@@ -166,6 +167,20 @@ def _n_hidden_layers(hidden_dim):
     return 1 if isinstance(hidden_dim, int) else len(hidden_dim)
 
 
+class _Frozen:
+    """Holds a module outside its owner's module tree.
+
+    Not a submodule, so it stays out of state_dict(), parameters(), .train() / .to() and DDP;
+    deepcopy (the EMA's AveragedModel) shares it instead of copying it.
+    """
+
+    def __init__(self, module):
+        self.module = module
+
+    def __deepcopy__(self, memo):
+        return self
+
+
 class CliffordFlow(nn.Module):
     def __init__(self, algebra, hidden_dim=(32,), n_cond_mv: int = 64,
                  pretrained_backbone: bool = True, n_time_samples: int = 8,
@@ -183,7 +198,8 @@ class CliffordFlow(nn.Module):
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
                  so2_up_token: bool = False,
-                 pose_tokens: str = "rotor"):
+                 pose_tokens: str = "rotor",
+                 sample_steps: int = 20):
         super().__init__()
         if pose_tokens not in ("rotor", "frame"):
             raise ValueError(f"pose_tokens must be 'rotor' or 'frame', got {pose_tokens!r}")
@@ -204,6 +220,9 @@ class CliffordFlow(nn.Module):
         self.algebra = algebra
         self.n_cond_mv = n_cond_mv
         self.n_time_samples = max(1, int(n_time_samples))
+        self.sample_steps = max(1, int(sample_steps))
+        self._reflow = None   # _Frozen(teacher), see set_reflow_teacher
+        self.reflow_steps = None
         self.mlp_heads = mlp_heads
         self.pose_tokens = pose_tokens
         mv_dim = int(2**algebra.dim)
@@ -318,6 +337,30 @@ class CliffordFlow(nn.Module):
     def forward(self, x, rotor, t, cls=None):
         return self.velocity(rotor, t, self.condition(x, cls))
 
+    def set_reflow_teacher(self, teacher, steps: int = 20):
+        """Train on `teacher`'s couplings from now on (reflow, Liu et al. 2023).
+
+        compute_loss then pairs every (image, r0) with the rotor the frozen teacher's ODE
+        carries r0 to, instead of the ground truth. Flow matching on those couplings
+        straightens the paths, so the student needs far fewer Euler steps.
+        """
+        if self.fisher_net is not None or teacher.fisher_net is not None:
+            raise ValueError("reflow needs the uniform source distribution (no fisher_prior)")
+        teacher.eval()
+        for p in teacher.parameters():
+            p.requires_grad_(False)
+        self._reflow = _Frozen(teacher)
+        self.reflow_steps = max(1, int(steps))
+
+    def _integrate(self, rotor, cond_mv, steps):
+        """Euler steps of the flow ODE from t=0 to t=1, on the rotor group."""
+        dt = 1.0 / steps
+        for i in range(steps):
+            t = torch.full((rotor.shape[0],), i * dt, device=rotor.device)
+            v = self.velocity(rotor, t, cond_mv)
+            rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
+        return rotor
+
     def compute_loss(self, img, rot_gt, criterion=None, cls=None):
         # The backbone forward dominates the step cost while the vector field is
         # small, so drawing several (t, r0) pairs per image buys that many more
@@ -344,6 +387,14 @@ class CliffordFlow(nn.Module):
         else:
             r0 = random_rotor(n).to(r1.device)
         t = torch.rand(n, device=r1.device)
+
+        if self._reflow is not None:
+            teacher = self._reflow.module
+            with torch.no_grad():
+                teacher_cond = teacher.condition(img, cls)
+                if k > 1:
+                    teacher_cond = teacher_cond.repeat_interleave(k, dim=0)
+                r1 = teacher._integrate(r0, teacher_cond, self.reflow_steps)
 
         rt = geodesic_interpolate(r0, r1, t, self.algebra)
         target = relative_log(r0, r1, self.algebra)
@@ -373,9 +424,10 @@ class CliffordFlow(nn.Module):
         return rotors[torch.arange(b, device=rotors.device), idx]
 
     @torch.no_grad()
-    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = 20):
+    def predict(self, x, cls=None, *, n_samples: int = 1, steps: int = None):
         b = x.shape[0]
         n_samples = max(1, int(n_samples))
+        steps = self.sample_steps if steps is None else steps
 
         cond_mv, fisher_a = self._features(x, cls)
         if n_samples > 1:
@@ -388,11 +440,7 @@ class CliffordFlow(nn.Module):
         else:
             rotor = random_rotor(b * n_samples).to(x.device)
 
-        dt = 1.0 / steps
-        for i in range(steps):
-            t = torch.full((rotor.shape[0],), i * dt, device=x.device)
-            v = self.velocity(rotor, t, cond_mv)
-            rotor = rotor_multiply(rotor, exp_map(dt * v), self.algebra)
+        rotor = self._integrate(rotor, cond_mv, steps)
 
         if n_samples > 1:
             rotor = self._medoid(rotor.view(b, n_samples, 4))

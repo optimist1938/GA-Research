@@ -76,6 +76,20 @@ def log_model_size(model, run, model_cfg):
         run.config.update(sizes, allow_val_change=True)
 
 
+def attach_reflow_teacher(model, cfg: Config):
+    """--reflow_teacher: start from the checkpoint's weights and train on its couplings."""
+    from pose3d.evaluate import build_model as build_saved_model
+
+    checkpoint = torch.load(cfg.flow.reflow_teacher, map_location="cpu", weights_only=False)
+    teacher, _ = build_saved_model(checkpoint, cfg.device)
+    # Strict: the run's flags have to rebuild the teacher's architecture.
+    model.load_state_dict(checkpoint["model"])
+    model.set_reflow_teacher(teacher, cfg.flow.reflow_steps)
+    print(f"Reflow: initialised from and trained on the couplings of {cfg.flow.reflow_teacher} "
+          f"({cfg.flow.reflow_steps} teacher steps)")
+    return model
+
+
 def instantiate(cfg: Config):
     train_loader, val_loader = create_dataloaders(cfg)
     print("Created Tralaloaders")
@@ -86,6 +100,8 @@ def instantiate(cfg: Config):
     if cfg.device is None:
         cfg.device = get_available_device()
     model.to(cfg.device)
+    if cfg.flow.reflow_teacher:
+        model = attach_reflow_teacher(model, cfg)
     model = distributed.convert_sync_bn(model, cfg)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.effective_lr)

@@ -9,12 +9,19 @@ medoid) is measurable on the same weights. Besides the median over all test imag
 reports the per-class medians and their mean, the number the IPDF / Image2Sphere / Rotation
 Laplace tables use. Nothing is trained and no W&B run is created.
 
+`--steps` repeats every pass at several Euler step counts (CliffordFlow only), and every pass is
+timed: the seconds spent inside `predict` (CUDA-synchronised, data loading excluded), so the
+accuracy / inference-time trade-off of fewer ODE steps is read off one table.
+
 Checkpoints written before the nested config store a flat `config` dict; both layouts load.
 CliffordFlow and i2s_real (the Image2Sphere baseline) checkpoints are supported.
 """
 
 import argparse
+import functools
+import inspect
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -45,8 +52,44 @@ def create_argparser():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--eval_samples", type=int, nargs="+", default=[1, 8, 32])
+    parser.add_argument("--steps", type=int, nargs="+", default=[20],
+                        help="Euler steps of the flow ODE; one pass per value (CliffordFlow only)")
     parser.add_argument("--seed", type=int, default=0)
     return parser
+
+
+class PredictTimer:
+    """Wraps `model.predict`: fixes the Euler step count and accumulates the time spent inside.
+
+    `functools.wraps` keeps the signature visible to inspect, so the metrics code still finds
+    `n_samples` and `cls` on it.
+    """
+
+    def __init__(self, model, device):
+        self.model, self.device = model, device
+        self.original = model.predict
+        self.takes_steps = "steps" in inspect.signature(self.original).parameters
+        self.steps, self.seconds = None, 0.0
+
+        @functools.wraps(self.original)
+        def predict(*args, **kwargs):
+            if self.takes_steps and self.steps is not None:
+                kwargs["steps"] = self.steps
+            self._sync()
+            start = time.perf_counter()
+            out = self.original(*args, **kwargs)
+            self._sync()
+            self.seconds += time.perf_counter() - start
+            return out
+
+        model.predict = predict
+
+    def _sync(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    def start(self, steps):
+        self.steps, self.seconds = steps, 0.0
 
 
 def download_checkpoint(artifact_ref):
@@ -162,42 +205,60 @@ def main():
     )
     print(f"Test images: {len(val)}")
 
+    timer = PredictTimer(model, device)
+    step_counts = args.steps if timer.takes_steps else [None]
+
+    # Warm-up (CUDA context, cuDNN autotuning) so the first timed pass is not charged for it.
+    timer.start(step_counts[0])
+    calculate_evaluation_metrics(model, [next(iter(val_loader))], cfg, n_samples=max(args.eval_samples))
+
     names = getattr(getattr(val, "real_dataset", val), "class_names", None)
     rows, per_class = [], {}
-    for n_samples in args.eval_samples:
-        err, cls = calculate_evaluation_metrics(model, val_loader, cfg, n_samples=n_samples,
-                                                return_classes=True)
-        macro = macro_metrics(err, cls)
-        class_mean, medians = macro["class_mean_median_error"], macro["class_medians"]
-        per_class[n_samples] = medians
-        rows.append((n_samples, float(np.median(err)), class_mean, float(np.mean(err)),
-                     acc_at(err, 15), acc_at(err, 30),
-                     macro["class_mean_acc@15"], macro["class_mean_acc@30"]))
-        print(f"K={n_samples}: median {rows[-1][1]:.3f}, mean of class medians {class_mean:.3f}")
+    for steps in step_counts:
+        for n_samples in args.eval_samples:
+            # Same starting noise for every pass, so step counts are compared on equal draws.
+            torch.manual_seed(args.seed)
+            timer.start(steps)
+            err, cls = calculate_evaluation_metrics(model, val_loader, cfg, n_samples=n_samples,
+                                                    return_classes=True)
+            macro = macro_metrics(err, cls)
+            class_mean, medians = macro["class_mean_median_error"], macro["class_medians"]
+            per_class[(steps, n_samples)] = medians
+            rows.append((steps, n_samples, float(np.median(err)), class_mean, float(np.mean(err)),
+                         acc_at(err, 15), acc_at(err, 30),
+                         macro["class_mean_acc@15"], macro["class_mean_acc@30"],
+                         timer.seconds, 1000 * timer.seconds / len(err)))
+            print(f"steps={steps} K={n_samples}: median {rows[-1][2]:.3f}, "
+                  f"mean of class medians {class_mean:.3f}, predict {timer.seconds:.1f}s")
 
     print()
     print("micro = pooled over all test images; macro (cls-*) = averaged over the classes")
-    print(f"{'samples':>8} {'median':>9} {'cls-mean':>9} {'mean':>9} {'acc@15':>8} {'acc@30':>8}"
-          f" {'cls-a@15':>9} {'cls-a@30':>9}")
-    for n_samples, median, class_mean, mean, a15, a30, c15, c30 in rows:
-        print(f"{n_samples:>8} {median:>9.3f} {class_mean:>9.3f} {mean:>9.3f} {a15:>8.3f} {a30:>8.3f}"
-              f" {c15:>9.3f} {c30:>9.3f}")
+    print("predict s = time inside model.predict for the whole test set (data loading excluded)")
+    print(f"{'steps':>6} {'samples':>8} {'median':>9} {'cls-mean':>9} {'mean':>9} {'acc@15':>8}"
+          f" {'acc@30':>8} {'cls-a@15':>9} {'cls-a@30':>9} {'predict s':>10} {'ms/img':>8}")
+    for steps, n_samples, median, class_mean, mean, a15, a30, c15, c30, secs, ms in rows:
+        print(f"{str(steps):>6} {n_samples:>8} {median:>9.3f} {class_mean:>9.3f} {mean:>9.3f}"
+              f" {a15:>8.3f} {a30:>8.3f} {c15:>9.3f} {c30:>9.3f} {secs:>10.2f} {ms:>8.2f}")
 
     print()
     print("Per-class median error:")
-    print(f"{'class':>12}" + "".join(f" {'K=' + str(k):>8}" for k in args.eval_samples))
-    for c in sorted(per_class[args.eval_samples[0]]):
+    keys = list(per_class)
+    print(f"{'class':>12}" + "".join(f" {f'{s}/K={k}':>10}" for s, k in keys))
+    for c in sorted(per_class[keys[0]]):
         label = names[c] if names else str(c)
-        print(f"{label:>12}" + "".join(f" {per_class[k][c]:>8.2f}" for k in args.eval_samples))
+        print(f"{label:>12}" + "".join(f" {per_class[key][c]:>10.2f}" for key in keys))
 
     if args.output_json:
         result = {
             "checkpoint": str(args.checkpoint or args.artifact),
-            "rows": [dict(zip(("samples", "median", "class_mean_median", "mean", "acc@15", "acc@30",
-                                 "class_mean_acc@15", "class_mean_acc@30"), r))
+            "device": str(device) if device.type != "cuda" else torch.cuda.get_device_name(device),
+            "rows": [dict(zip(("steps", "samples", "median", "class_mean_median", "mean", "acc@15",
+                               "acc@30", "class_mean_acc@15", "class_mean_acc@30",
+                               "predict_seconds", "predict_ms_per_image"), r))
                      for r in rows],
-            "per_class": {str(k): {(names[c] if names else str(c)): m for c, m in v.items()}
-                          for k, v in per_class.items()},
+            "per_class": {f"steps={s},K={k}": {(names[c] if names else str(c)): m
+                                               for c, m in v.items()}
+                          for (s, k), v in per_class.items()},
         }
         Path(args.output_json).write_text(json.dumps(result, indent=1))
 
