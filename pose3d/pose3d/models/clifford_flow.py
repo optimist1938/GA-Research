@@ -44,7 +44,8 @@ class ImageToMultivectors(nn.Module):
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
                  so2_up_token: bool = False,
-                 so2_split_norm: bool = False):
+                 so2_split_norm: bool = False,
+                 so2_tokens: int = 0):
         super().__init__()
         if cond_tokens not in ("pooled", "so2"):
             raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
@@ -75,7 +76,7 @@ class ImageToMultivectors(nn.Module):
             # Same token count as the pooled reshape (2048 -> 256), but built so that the vector
             # parts rotate with the image (see models/so2_head.py). Assumes a 224 input (7x7 map).
             from pose3d.models.so2_head import SO2ConditionHead
-            self.n_mv = backbone_channels // mv_dim
+            self.n_mv = so2_tokens or backbone_channels // mv_dim
             self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
                                                  channels=so2_channels, up_token=so2_up_token,
                                                  split_norm=so2_split_norm)
@@ -198,8 +199,11 @@ class CliffordFlow(nn.Module):
             raise ValueError("mlp_heads and fisher_prior cannot be combined")
         if vector_field not in ("clifford", "gatr"):
             raise ValueError(f"vector_field must be 'clifford' or 'gatr', got {vector_field!r}")
-        if condition_head not in ("clifford", "gatr"):
-            raise ValueError(f"condition_head must be 'clifford' or 'gatr', got {condition_head!r}")
+        if condition_head not in ("clifford", "gatr", "none"):
+            raise ValueError(f"condition_head must be 'clifford', 'gatr' or 'none', got {condition_head!r}")
+        if condition_head == "none" and (cond_tokens != "so2" or mlp_heads):
+            raise ValueError("condition_head='none' feeds the so2 tokens straight to the vector field: "
+                             "it needs cond_tokens='so2' (and no mlp_heads)")
         if "gatr" in (vector_field, condition_head) and mlp_heads:
             raise ValueError("GATr heads and mlp_heads cannot be combined")
         if condition_head == "gatr" and fisher_checkpoint:
@@ -234,10 +238,14 @@ class CliffordFlow(nn.Module):
                 encoder_type=encoder_type, depth_anything_model=depth_anything_model,
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels,
                 conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels,
-                so2_up_token=so2_up_token, so2_split_norm=so2_split_norm)
+                so2_up_token=so2_up_token, so2_split_norm=so2_split_norm,
+                so2_tokens=n_cond_mv if condition_head == "none" else 0)
             cond_in_features = self.adapter.n_mv
 
-        if condition_head == "gatr":
+        if condition_head == "none":
+            # The so2 head already emits n_cond_mv honest multivectors (incl. the e3 axis token).
+            self.condition_head = nn.Identity()
+        elif condition_head == "gatr":
             from pose3d.models.gatr_denoiser import GATrConditionHead
             self.condition_head = GATrConditionHead(
                 cond_in_features, self.n_cond_mv, **(gatr or {}))

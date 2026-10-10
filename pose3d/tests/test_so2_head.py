@@ -92,12 +92,19 @@ def test_split_norm_makes_the_initial_field_depend_on_pose_and_image():
     assert p1 > 3 * p0 and i1 > 3 * i0
 
 
+def test_no_condition_head_feeds_so2_tokens_straight_through():
+    model = _flow("frame_ch", split_norm=True, condition_head="none")
+    assert isinstance(model.condition_head, torch.nn.Identity)
+    fmap = torch.randn(2, 2048, 7, 7, dtype=torch.float64)
+    assert model.adapter.conv_adapter(fmap).shape == (2, 6, 8)          # n_cond_mv tokens, incl. the e3 axis
+
+
 def test_head_rejects_a_wrong_map_size():
     with pytest.raises(ValueError):
         SO2ConditionHead(c_in=8, n_out=4, channels=4)(torch.randn(1, 8, 5, 5))
 
 
-def _flow(pose_tokens, dtype=torch.float64, split_norm=False):
+def _flow(pose_tokens, dtype=torch.float64, split_norm=False, condition_head="clifford"):
     from pose3d.models.gatr_denoiser import _ensure_xformers_stub
 
     _ensure_xformers_stub()
@@ -109,7 +116,7 @@ def _flow(pose_tokens, dtype=torch.float64, split_norm=False):
     model = CliffordFlow(CliffordAlgebra((1, 1, 1)), hidden_dim=[8], n_cond_mv=6, pretrained_backbone=False,
                          encoder_type="resnet50", conv_adapter=False, n_time_samples=2,
                          vector_field="gatr", cond_tokens="so2", so2_channels=8,
-                         pose_tokens=pose_tokens, so2_split_norm=split_norm,
+                         pose_tokens=pose_tokens, so2_split_norm=split_norm, condition_head=condition_head,
                          gatr=dict(num_blocks=2, mv_channels=4, s_channels=8, num_heads=2)).to(dtype)
     with torch.no_grad():  # undo the zero init of the read-out and the flat radial profiles
         for p in model.vector_field.out.parameters():
@@ -123,11 +130,13 @@ def _velocity_from_map(model, fmap, rotor, t):
     return model.velocity(rotor, t, cond)
 
 
-@pytest.mark.parametrize("pose_tokens,split_norm", [("frame", False), ("frame_ch", False), ("frame_ch", True)])
-def test_frame_velocity_is_invariant_to_rotating_image_and_pose_together(pose_tokens, split_norm):
+@pytest.mark.parametrize("pose_tokens,split_norm,condition_head", [
+    ("frame", False, "clifford"), ("frame_ch", False, "clifford"), ("frame_ch", True, "clifford"),
+    ("frame_ch", True, "none")])
+def test_frame_velocity_is_invariant_to_rotating_image_and_pose_together(pose_tokens, split_norm, condition_head):
     # Turning the image turns the true pose: R -> G R. The body-frame velocity the flow integrates
     # (r <- r exp(dt v)) must then be unchanged.
-    model = _flow(pose_tokens, split_norm=split_norm)
+    model = _flow(pose_tokens, split_norm=split_norm, condition_head=condition_head)
     fmap = torch.randn(2, 2048, 7, 7, dtype=torch.float64)
     rotor = random_rotor(2).double()
     g = matrix_to_rotor(R_Z_MINUS_90).expand(2, 4)

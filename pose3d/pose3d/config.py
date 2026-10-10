@@ -247,7 +247,9 @@ class FlowConfig:
     # Same choice for the condition head (backbone multivectors -> n_cond_mv condition
     # multivectors): "gatr" runs GATr over the backbone tokens plus n_cond_mv learned queries.
     # Shares the gatr_* sizes with the vector field. Not with mlp_heads or fisher_prior.
-    condition_head: Literal["clifford", "gatr"] = "clifford"
+    # "none" (needs cond_tokens=so2): no condition head; the so2 head emits the n_cond_mv condition
+    # multivectors itself and they go straight into the vector field.
+    condition_head: Literal["clifford", "gatr", "none"] = "clifford"
     # How the backbone map becomes the condition head's 256 input multivectors. "pooled": global
     # average pool, then 8 consecutive channels are declared one multivector (the 8.95 deg
     # recipe), so the "vectors" do not rotate with the image. "so2": keep the 7x7 map, feature
