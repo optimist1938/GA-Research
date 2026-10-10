@@ -149,6 +149,22 @@ F_k ─ 1×1 conv 2048→128 + GELU (поточечно по клетке и в�
 - на обычном тесте с приором c4lift не хуже контроля более чем на 0.3° class-mean;
 - без приора проигрыш в пределах оценки Stage 0.
 
+### 7.1 Что запущено на самом деле (2026-10-10, аккаунт avgurpetrovich, RTX PRO 6000)
+
+От протокола выше пришлось отступить в трёх местах:
+- **ResNet инициализирован с ImageNet, как в рецепте 8.95, а не из учителя.** Чекпоинт учителя через API недоступен. К тому же бэкбон учителя дообучался под pooled-токены и подыгрывал бы контрольному плечу.
+- **60 эпох вместо 100.** Иначе c4lift (бэкбон ×4) не укладывается в 12-часовой лимит Kaggle. Абсолютные цифры обоих плеч поэтому ниже 8.95; сравниваются плечи между собой.
+- **`--pose_tokens frame_ch` вместо `frame`, у c4lift ещё `--so2_split_norm`.** Это фикс седловой точки из `so2-cond-head` (коммит `b0ca392`).
+
+```
+ОБЩЕЕ:     --vector_field gatr --use_warp --use_synth --num_workers 24 --ema --fixed_val_noise
+           --batch_size 64 --lr_scaling sqrt --pose_tokens frame_ch --n_epochs 60 --seed 1
+контроль:  ОБЩЕЕ                                        kernel avgurpetrovich/so2-ctrl-pooled-framech
+вариант A: ОБЩЕЕ --cond_tokens c4lift --so2_split_norm  kernel avgurpetrovich/so2-c4lift-framech
+```
+
+Код — снапшот коммита `652b647` (датасет `avgurpetrovich/ga-research-snapshot-so2`). После обучения в каждом кернеле запускается `eval_rotations` в двух вариантах: `--couple_noise --angles 0 90 180 20 45` и `--roll_prior --angles 0 90`.
+
 ## 8. Результаты
 
 **Пробы канонизатора** (5-fold CV, `probe_up2.py`). Бинарный логрег — 93.1%, 4-классовый RotNet (логрег) — 92.2%, MLP — 93.2%. У всех один потолок ≈ 93%: около 7% кропов неоднозначны на уровне признаков.
