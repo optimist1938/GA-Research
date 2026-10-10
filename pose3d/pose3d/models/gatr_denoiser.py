@@ -116,6 +116,50 @@ class GATrVectorField(nn.Module):
         return result
 
 
+class GATrCloudField(nn.Module):
+    """Pose + time + a direction cloud -> the spatial angular velocity as a bivector (P1).
+
+    Token 0 is the pose as three multivector channels with the right parity under reflections:
+    l = (R e1) e123, a bivector (axial), then R e2 and R e3 (vectors, polar). Two polar axes and one
+    axial axis transform under a reflection F exactly as the axes of F R F do, so with GATr's
+    Pin(3,0,1) equivariance the flow of a left-right flipped image is the flipped flow. The
+    velocity is read from the bivector part (e12, e13, e23) of token 0's output: angular velocity is
+    axial, so a bivector is its honest type (the frame_ch vector-dual read-out passes rotation tests
+    but fails the flip test). l carries bivector signal at the input, so the zero-initialised
+    read-out still gets a gradient from step 0.
+
+    Tokens 1.. are the condition cloud, packed (B, n, 8 + cond_scalars): a Cl(3,0) multivector in
+    channel 0 and per-token scalar channels. Every token also gets the flow time t and a pose flag.
+    """
+
+    def __init__(self, cond_scalars: int, mv_channels: int = 8, s_channels: int = 32,
+                 num_blocks: int = 4, num_heads: int = 4):
+        super().__init__()
+        GATr = _import_gatr()
+        self.cond_scalars = cond_scalars
+        self.net = GATr(
+            in_mv_channels=3, out_mv_channels=1, hidden_mv_channels=mv_channels,
+            in_s_channels=cond_scalars + 2, out_s_channels=None, hidden_s_channels=s_channels,
+            attention={"num_heads": num_heads}, mlp={}, num_blocks=num_blocks,
+        )
+        self.register_buffer("_pga_index", torch.tensor(_PGA_INDEX), persistent=False)
+        self.register_buffer("_rot_index", torch.tensor(_ROTATION_BIVECTOR), persistent=False)
+        self.out = self.net.linear_out  # zeroed by CliffordFlow so the initial velocity is 0
+
+    def forward(self, pose, t, cond):
+        """pose (B, 3, 8) Cl(3,0), t (B,), cond (B, n, 8 + cond_scalars) -> (B, 3) e12, e13, e23."""
+        b, n = cond.shape[:2]
+        mv = pose.new_zeros(b, 1 + n, 3, 16)
+        mv[:, 0, :, self._pga_index] = pose
+        mv[:, 1:, 0, self._pga_index] = cond[..., :8]
+        scalars = pose.new_zeros(b, 1 + n, self.cond_scalars + 2)
+        scalars[:, 1:, :self.cond_scalars] = cond[..., 8:]
+        scalars[..., -2] = t.to(pose.dtype).unsqueeze(1)
+        scalars[:, 0, -1] = 1.0
+        out_mv, _ = self.net(mv, scalars=scalars)   # (B, 1 + n, 1, 16)
+        return out_mv[:, 0, 0][:, self._rot_index]
+
+
 class GATrConditionHead(nn.Module):
     """(B, n_in, 8) Cl(3,0) multivectors -> (B, n_out, 8), like TralaleroTralala.
 

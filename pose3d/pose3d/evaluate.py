@@ -117,6 +117,7 @@ def build_model(checkpoint, device, eval_rec_level=None):
         so2_up_token=saved.get("so2_up_token", False),
         so2_split_norm=saved.get("so2_split_norm", False),
         pose_tokens=saved.get("pose_tokens", "rotor"),
+        dircloud_scalars=saved.get("dircloud_scalars", 64),
         gatr=dict(num_blocks=saved.get("gatr_blocks", 4), mv_channels=saved.get("gatr_mv_channels", 8),
                   s_channels=saved.get("gatr_s_channels", 32), num_heads=saved.get("gatr_heads", 4)),
     )

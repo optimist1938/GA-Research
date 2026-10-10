@@ -45,12 +45,13 @@ class ImageToMultivectors(nn.Module):
                  so2_channels: int = 128,
                  so2_up_token: bool = False,
                  so2_split_norm: bool = False,
-                 so2_tokens: int = 0):
+                 so2_tokens: int = 0,
+                 dircloud_scalars: int = 64):
         super().__init__()
-        if cond_tokens not in ("pooled", "so2"):
-            raise ValueError(f"cond_tokens must be 'pooled' or 'so2', got {cond_tokens!r}")
-        if cond_tokens == "so2" and conv_adapter:
-            raise ValueError("cond_tokens='so2' replaces the pooling, so it needs conv_adapter=False")
+        if cond_tokens not in ("pooled", "so2", "dircloud"):
+            raise ValueError(f"cond_tokens must be 'pooled', 'so2' or 'dircloud', got {cond_tokens!r}")
+        if cond_tokens != "pooled" and conv_adapter:
+            raise ValueError(f"cond_tokens={cond_tokens!r} replaces the pooling, so it needs conv_adapter=False")
         if not is_dense_backbone(encoder_type):
             # The conv adapter is sized from a deep backbone's channel count; the
             # GA encoders emit a handful of channels at full resolution instead.
@@ -80,6 +81,13 @@ class ImageToMultivectors(nn.Module):
             self.conv_adapter = SO2ConditionHead(backbone_channels, n_out=self.n_mv,
                                                  channels=so2_channels, up_token=so2_up_token,
                                                  split_norm=so2_split_norm)
+            return
+        if cond_tokens == "dircloud":
+            # One token per cell of the 7x7 map (direction + scalar features) plus the e3 axis,
+            # packed (B, 50, 8 + dircloud_scalars + 1); see models/dircloud_head.py.
+            from pose3d.models.dircloud_head import DirectionCloudHead
+            self.conv_adapter = DirectionCloudHead(backbone_channels, scalars=dircloud_scalars)
+            self.n_mv = self.conv_adapter.n_tokens
             return
         if not self.use_conv_adapter:
             # No adapter: the globally pooled backbone vector is cut into consecutive
@@ -120,7 +128,7 @@ class ImageToMultivectors(nn.Module):
         else:
             fmap = self.backbone(x)
         adapted = self.conv_adapter(fmap)
-        if self.cond_tokens == "so2":
+        if self.cond_tokens in ("so2", "dircloud"):
             return adapted
         if not self.use_conv_adapter:
             return adapted.flatten(1).view(adapted.shape[0], self.n_mv, self.mv_dim)
@@ -187,10 +195,15 @@ class CliffordFlow(nn.Module):
                  so2_channels: int = 128,
                  so2_up_token: bool = False,
                  so2_split_norm: bool = False,
-                 pose_tokens: str = "rotor"):
+                 pose_tokens: str = "rotor",
+                 dircloud_scalars: int = 64):
         super().__init__()
-        if pose_tokens not in ("rotor", "frame", "frame_ch"):
-            raise ValueError(f"pose_tokens must be 'rotor', 'frame' or 'frame_ch', got {pose_tokens!r}")
+        if pose_tokens not in ("rotor", "frame", "frame_ch", "frame_pin"):
+            raise ValueError(f"pose_tokens must be 'rotor', 'frame', 'frame_ch' or 'frame_pin', got {pose_tokens!r}")
+        if (cond_tokens == "dircloud") != (pose_tokens == "frame_pin"):
+            raise ValueError("cond_tokens='dircloud' and pose_tokens='frame_pin' go together (P1)")
+        if cond_tokens == "dircloud" and condition_head != "none":
+            raise ValueError("cond_tokens='dircloud' feeds the cloud straight to GATr: it needs condition_head='none'")
         if pose_tokens != "rotor" and (vector_field != "gatr" or mlp_heads):
             raise ValueError(f"pose_tokens={pose_tokens!r} needs the GATr vector field (and no mlp_heads)")
         if cond_tokens != "pooled" and fisher_checkpoint:
@@ -201,9 +214,9 @@ class CliffordFlow(nn.Module):
             raise ValueError(f"vector_field must be 'clifford' or 'gatr', got {vector_field!r}")
         if condition_head not in ("clifford", "gatr", "none"):
             raise ValueError(f"condition_head must be 'clifford', 'gatr' or 'none', got {condition_head!r}")
-        if condition_head == "none" and (cond_tokens != "so2" or mlp_heads):
-            raise ValueError("condition_head='none' feeds the so2 tokens straight to the vector field: "
-                             "it needs cond_tokens='so2' (and no mlp_heads)")
+        if condition_head == "none" and (cond_tokens == "pooled" or mlp_heads):
+            raise ValueError("condition_head='none' feeds the so2 / dircloud tokens straight to the vector "
+                             "field: it needs cond_tokens='so2' or 'dircloud' (and no mlp_heads)")
         if "gatr" in (vector_field, condition_head) and mlp_heads:
             raise ValueError("GATr heads and mlp_heads cannot be combined")
         if condition_head == "gatr" and fisher_checkpoint:
@@ -239,8 +252,11 @@ class CliffordFlow(nn.Module):
                 freeze_backbone=freeze_backbone, adapter_channels=adapter_channels,
                 conv_adapter=conv_adapter, cond_tokens=cond_tokens, so2_channels=so2_channels,
                 so2_up_token=so2_up_token, so2_split_norm=so2_split_norm,
-                so2_tokens=n_cond_mv if condition_head == "none" else 0)
+                so2_tokens=n_cond_mv if condition_head == "none" else 0,
+                dircloud_scalars=dircloud_scalars)
             cond_in_features = self.adapter.n_mv
+            if cond_tokens == "dircloud":
+                self.n_cond_mv = self.adapter.n_mv   # the cloud's size, not a free choice
 
         if condition_head == "none":
             # The so2 head already emits n_cond_mv honest multivectors (incl. the e3 axis token).
@@ -253,7 +269,10 @@ class CliffordFlow(nn.Module):
             self.condition_head = TralaleroTralala(
                 algebra, in_features=cond_in_features, hidden_dim=hidden_dim,
                 out_features=self.n_cond_mv)
-        if vector_field == "gatr":
+        if pose_tokens == "frame_pin":
+            from pose3d.models.gatr_denoiser import GATrCloudField
+            self.vector_field = GATrCloudField(dircloud_scalars + 1, **(gatr or {}))  # + the axis flag
+        elif vector_field == "gatr":
             from pose3d.models.gatr_denoiser import GATrVectorField
             self.vector_field = GATrVectorField(
                 self.n_cond_mv, n_pose_tokens=3 if pose_tokens == "frame" else 1,
@@ -301,6 +320,8 @@ class CliffordFlow(nn.Module):
         return cond_mv
 
     def velocity(self, rotor, t, cond_mv):
+        if self.pose_tokens == "frame_pin":
+            return self._pin_velocity(rotor, t, cond_mv)
         t_mv = self.algebra.embed(t.reshape(-1, 1), (0,)).unsqueeze(1)
         if self.pose_tokens in ("frame", "frame_ch"):
             return self._frame_velocity(rotor, t_mv, cond_mv)
@@ -328,6 +349,19 @@ class CliffordFlow(nn.Module):
         else:
             inp = torch.cat([frame_mv, t_mv, cond_mv], dim=1)
         spatial = self.algebra.get_grade(self.vector_field(inp)[:, 0], 2)  # e12, e13, e23
+        return self._spatial_to_body(rotor, spatial)
+
+    def _pin_velocity(self, rotor, t, cond):
+        """P1: the pose as l = (R e1) e123 (axial), R e2, R e3 (polar), a bivector velocity out."""
+        frame = rotor_to_matrix(rotor, self.algebra).transpose(-1, -2)   # rows: R e1, R e2, R e3
+        pose = frame.new_zeros(frame.shape[0], 3, 8)
+        a = frame[:, 0]
+        pose[:, 0, 4], pose[:, 0, 5], pose[:, 0, 6] = a[:, 2], -a[:, 1], a[:, 0]   # e12, e13, e23
+        pose[:, 1, 1:4], pose[:, 2, 1:4] = frame[:, 1], frame[:, 2]
+        return self._spatial_to_body(rotor, self.vector_field(pose, t, cond))
+
+    def _spatial_to_body(self, rotor, spatial):
+        """Camera-frame velocity bivector (e12, e13, e23) -> body velocity r~ w r."""
         spatial_rotor = torch.cat([torch.zeros_like(spatial[..., :1]), spatial], dim=-1)
         body = rotor_multiply(rotor_multiply(rotor_conjugate(rotor, self.algebra), spatial_rotor,
                                              self.algebra), rotor, self.algebra)

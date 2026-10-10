@@ -257,7 +257,12 @@ class FlowConfig:
     # cell's in-plane direction from the image centre, plus a constant optical-axis (e3) token:
     # rotating the image by 90 deg rotates every token about e3 exactly (models/so2_head.py).
     # Without conv_adapter, fisher_prior. so2_channels = width of its first 1x1 conv.
-    cond_tokens: Literal["pooled", "so2"] = "pooled"
+    # "dircloud" (P1, reports/geometric_redesign.md): nothing is pooled; every cell of the 7x7 map is
+    # its own GATr token, its fixed viewing direction as the vector part and dircloud_scalars
+    # features as scalar channels, plus the e3 axis (models/dircloud_head.py). Needs
+    # pose_tokens=frame_pin and condition_head=none.
+    cond_tokens: Literal["pooled", "so2", "dircloud"] = "pooled"
+    dircloud_scalars: int = 64
     so2_channels: int = 128
     # With cond_tokens=so2: also feed a constant image-up token (-e2). Breaks the in-plane SO(2) on
     # purpose (Pascal3D photos are upright) so the model has an in-plane reference from step one;
@@ -273,7 +278,10 @@ class FlowConfig:
     # "frame_ch": the same three vectors as three channels of ONE token, so geometric products inside
     # that token can combine the pose with image directions from the first block (with "frame" the
     # read-out token holds only R e1 and starts as a pose- and image-independent constant).
-    pose_tokens: Literal["rotor", "frame", "frame_ch"] = "rotor"
+    # "frame_pin" (P1, with cond_tokens=dircloud): R e2, R e3 as vectors and R e1 as the bivector
+    # (R e1) e123, the velocity read out as a bivector, so the flow is exactly equivariant to
+    # 90 deg turns and left-right flips of the map (GATrCloudField in models/gatr_denoiser.py).
+    pose_tokens: Literal["rotor", "frame", "frame_ch", "frame_pin"] = "rotor"
     gatr_blocks: int = 4
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token
