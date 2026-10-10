@@ -32,9 +32,9 @@ def _assert_tokens_turned(mv, mv_rot):
     torch.testing.assert_close(mv_rot[..., [5, 6]], mv[..., [5, 6]] @ r2.T)
 
 
-def _head(c_in=16, n_out=9):
+def _head(c_in=16, n_out=9, split_norm=False):
     torch.manual_seed(0)
-    head = C4HarmonicHead(c_in=c_in, n_out=n_out, channels=6).double()
+    head = C4HarmonicHead(c_in=c_in, n_out=n_out, channels=6, split_norm=split_norm).double()
     with torch.no_grad():
         head.radial.normal_()
     return head
@@ -48,8 +48,9 @@ def test_lift_is_the_regular_representation():
         torch.testing.assert_close(f_rot[:, k], rot90(f[:, (k - 1) % 4], 1))
 
 
-def test_tokens_turn_with_the_image():
-    bb, head = _toy_backbone(), _head()
+@pytest.mark.parametrize("split_norm", [False, True])
+def test_tokens_turn_with_the_image(split_norm):
+    bb, head = _toy_backbone(), _head(split_norm=split_norm)
     x = torch.randn(3, 3, 28, 28, dtype=torch.float64)
     mv, mv_rot = head(c4_lift(bb, x)), head(c4_lift(bb, rot90(x, 1)))
     _assert_tokens_turned(mv, mv_rot)
@@ -107,7 +108,7 @@ def _flow(dtype=torch.float64):
     model = CliffordFlow(CliffordAlgebra((1, 1, 1)), hidden_dim=[8], n_cond_mv=6, pretrained_backbone=False,
                          encoder_type="resnet50", conv_adapter=False, n_time_samples=2,
                          vector_field="gatr", cond_tokens="c4lift", so2_channels=8,
-                         pose_tokens="frame",
+                         pose_tokens="frame_ch", so2_split_norm=True,
                          gatr=dict(num_blocks=2, mv_channels=4, s_channels=8, num_heads=2)).to(dtype)
     with torch.no_grad():  # undo the zero init of the read-out and the flat radial profiles
         for p in model.vector_field.out.parameters():
@@ -208,7 +209,8 @@ def test_eval_rotations_with_coupled_noise_gives_the_same_error_image_by_image(t
                                      "flow_hidden_dim": [8], "n_cond_mv": 6, "conv_adapter": False,
                                      "vector_field": "gatr", "gatr_blocks": 2, "gatr_mv_channels": 4,
                                      "gatr_s_channels": 8, "gatr_heads": 2, "cond_tokens": "c4lift",
-                                     "so2_channels": 8, "pose_tokens": "frame"}}}, ckpt)
+                                     "so2_channels": 8, "pose_tokens": "frame_ch",
+                                     "so2_split_norm": True}}}, ckpt)
 
     class Fake(torch.utils.data.Dataset):
         def __init__(self, *a, **k):
@@ -294,7 +296,7 @@ def test_backbone_init_from_a_pooled_rotor_teacher(tmp_path):
     path = tmp_path / "teacher.pth"
     torch.save({"model": teacher.state_dict()}, path)
     student = CliffordFlow(CliffordAlgebra((1, 1, 1)), cond_tokens="c4lift", so2_channels=8,
-                           pose_tokens="frame", **common)
+                           pose_tokens="frame_ch", so2_split_norm=True, **common)
     cfg = Config()
     cfg.device = torch.device("cpu")
     cfg.flow.init_from, cfg.flow.init_mode, cfg.flow.backbone_lr_mult = str(path), "backbone", 0.35

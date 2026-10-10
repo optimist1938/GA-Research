@@ -33,6 +33,11 @@ from the content (an upright-trained backbone answers differently to the four vi
 in-plane reference the equivariant model needs, without a constant up token breaking the symmetry.
 
 A final constant e3 token marks the optical axis, as in the SO(2) head.
+
+split_norm=True normalises the invariant slots (1, e3, e12, e123) and the directional slots
+(e1, e2, e13, e23) separately, each with its own learned gain, as `so2_head.py` does: with one
+joint RMS a small directional group would start the model near the SO(2)-symmetric saddle found in
+the so2 + frame runs. Both RMS values are rotation invariant, so the equivariance is unchanged.
 """
 
 import torch
@@ -67,7 +72,8 @@ class C4HarmonicHead(nn.Module):
     _VECTOR = (1, 2)            # e1, e2: frequency 1
     _BIVECTOR = (5, 6)          # e13, e23: frequency 1, same sense as the vector
 
-    def __init__(self, c_in: int = 2048, n_out: int = 256, channels: int = 128, grid: int = 7):
+    def __init__(self, c_in: int = 2048, n_out: int = 256, channels: int = 128, grid: int = 7,
+                 split_norm: bool = False):
         super().__init__()
         if n_out < 2:
             raise ValueError("n_out must leave room for at least one image token besides e3")
@@ -98,6 +104,9 @@ class C4HarmonicHead(nn.Module):
         # Radial profiles, one per (token, term): 4 + 2 (c0), 6 (c1), 6 (c2) complex-or-real terms.
         self.radial = nn.Parameter(torch.full((18 * k, n_radii), 1.0 / grid**2))
         self.gain = nn.Parameter(torch.tensor(2.0))   # as the SO(2) head: the pooled tokens' norm
+        self.split_norm = bool(split_norm)
+        if self.split_norm:   # gain then scales the invariant group, gain_dir the directional one
+            self.gain_dir = nn.Parameter(torch.tensor(2.0))
 
     def forward(self, lifted):
         b, n_views, c, h, w = lifted.shape
@@ -139,7 +148,15 @@ class C4HarmonicHead(nn.Module):
         tokens[..., list(self._INVARIANT)] = inv
         tokens[..., 1], tokens[..., 2] = z_re[:, 0], z_im[:, 0]
         tokens[..., 5], tokens[..., 6] = z_re[:, 1], z_im[:, 1]
-        rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()      # (B, 1), invariant
         axis = lifted.new_zeros(b, 1, 8)
         axis[:, 0, 3] = 1.0
+        if self.split_norm:
+            inv_idx, dir_idx = list(self._INVARIANT), list(self._VECTOR + self._BIVECTOR)
+            rms_inv = tokens[..., inv_idx].pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()
+            rms_dir = tokens[..., dir_idx].pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()
+            scaled = torch.zeros_like(tokens)
+            scaled[..., inv_idx] = self.gain * tokens[..., inv_idx] / rms_inv.unsqueeze(-1)
+            scaled[..., dir_idx] = self.gain_dir * tokens[..., dir_idx] / rms_dir.unsqueeze(-1)
+            return torch.cat([scaled, axis], dim=1)
+        rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()      # (B, 1), invariant
         return torch.cat([self.gain * tokens / rms.unsqueeze(-1), axis], dim=1)
