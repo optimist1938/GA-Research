@@ -15,7 +15,7 @@ import torch
 from dpd.config import Config, parse_args
 from dpd.data import BANDS, load, split_index
 from dpd.metrics import band_project, nmse_db, psd_plot
-from dpd.models import build
+from dpd.models import TorchModel, build
 
 
 def run(cfg: Config) -> dict:
@@ -56,6 +56,14 @@ def run(cfg: Config) -> dict:
     (out / f"{name}.json").write_text(json.dumps(res, indent=2))
     if cfg.run.save_pred:
         np.save(out / f"{name}_pred.npy", (y / scale).astype(np.complex64))
+    if cfg.run.save_model:
+        if not isinstance(model, TorchModel):
+            raise ValueError(f"--save_model supports torch models only, not {cfg.model.model}"
+                             f"{' with --residual_lut' if cfg.model.residual_lut else ''}")
+        torch.save({"kind": cfg.model.model, "config": cfg.to_dict(), "state_dict": model.net.state_dict(),
+                    "mu": getattr(model, "mu", None), "sd": getattr(model, "sd", None),
+                    "scale": scale.ravel(), "n_params": model.n_params, "bands": res["bands"]},
+                   out / f"{name}_model.pt")
     if cfg.run.psd_plot:
         for c, b in enumerate(BANDS):
             psd_plot(out / f"{name}_psd_{b}.png", sig.fs,

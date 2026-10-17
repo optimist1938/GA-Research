@@ -41,6 +41,9 @@ class RunConfig:
     # +-120 MHz, like Huawei's BL filter). 0 = off.
     band_limit_mhz: float = 0.0
     save_pred: bool = False   # write the model output (3, N) to runs/<run_name>_pred.npy (for ensembles)
+    # Write the trained weights, input normalization and band scales to runs/<run_name>_model.pt
+    # (torch models only); `python -m dpd.export_matlab` turns it into a MATLAB model.
+    save_model: bool = False
 
 
 @dataclass
