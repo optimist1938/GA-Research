@@ -51,6 +51,7 @@ ModelName = Literal[
     "clifford_flow",   # the main line: conditional flow matching on Spin(3) rotors
     "mlp_flow",        # non-equivariant flow-matching baseline
     "i2s_real",        # published Image2Sphere, adapted to this harness
+    "wignerd",         # Lee & Cho 2024 (arXiv 2411.00543): Image2Sphere trunk regressing Wigner-D coefficients
     "i2s",             # in-repo I2S with a GA head (average-pooled features)
     "ga_i2s",          # in-repo I2S with the GA pixel encoder
     "tralalero",       # direct regression with a GA head
@@ -88,6 +89,12 @@ class RunConfig:
     wandb_project: str = "3D Pose Estimation"
     wandb_entity: str = "clifforders"
     wandb_group: Optional[str] = None
+    # Log flow-trajectory visualizations to W&B (needs --run_name and a flow model): every viz_every epochs a predictions table
+    # (image, true / predicted rotation, error, share of noise samples within 15 deg) and the paths-in-SO(3) figure for viz_images fixed
+    # validation images, and after the last epoch also a film strip and an animation. See engine/flow_viz.py.
+    log_viz: bool = False
+    viz_every: int = 10          # 0: only after the last epoch
+    viz_images: int = 6
     # Base seed for the run. None: torch's default. Under --ddp every rank adds its rank,
     # so the flow's (t, r0) noise differs between GPUs.
     seed: Optional[int] = None
@@ -113,6 +120,16 @@ class TrainConfig:
     eval_samples: int = 32
     # Per-optimizer-step decay of Features.ema (0.999: ~1000-step horizon).
     ema_decay: float = 0.999
+    # Optimizer and schedule. The flow recipes use AdamW with linear warmup + cosine decay. "sgd" is SGD with
+    # Nesterov momentum and "step" multiplies the lr by lr_step_gamma every lr_step_epochs epochs (no warmup),
+    # the Image2Sphere / Wigner-D schedule.
+    optimizer: Literal["adamw", "sgd"] = "adamw"
+    lr_schedule: Literal["cosine", "step"] = "cosine"
+    sgd_momentum: float = 0.9
+    lr_step_epochs: int = 30
+    lr_step_gamma: float = 0.1
+    # Global gradient-norm clip (0 turns it off).
+    grad_clip: float = 1.0
 
 
 @dataclass
@@ -203,6 +220,14 @@ class DataConfig:
     # 1: the standard 5-shape benchmark (tet, cube, icosa, cone, cyl). 2/3/4: the single-shape
     # near-symmetric variants (sphereX/cylO/tetX).
     symsol_set: int = 1
+    # "10 % of the training data" (Howell et al. 2023, Table 2) is --symsol_train_views 4500 (of 45,000 per shape). None: all views.
+    symsol_train_views: Optional[int] = None
+    symsol_test_views: Optional[int] = None        # views per shape scored every epoch (None: all 5,000)
+    # Final grid log-likelihood (wignerd): test views per shape, and equivalent poses scored per view.
+    symsol_ll_views: int = 5000
+    symsol_ll_equivalents: int = 8
+    # Training items also carry every equivalent pose (rots_eq / n_eq) instead of one random equivalent.
+    symsol_nearest_coupling: bool = False
 
 
 @dataclass
@@ -289,6 +314,13 @@ class I2SConfig:
     i2s_eval_rec_level: int = 3
     # i2s_real: apply ImageNet normalisation to the [0, 1] inputs.
     i2s_normalize: bool = True
+    # wignerd: weights w_l of the frequency-domain MSE (paper eq. 4; the paper does not spell them out).
+    # "unit": 1 / (2l+1)^2, so every degree's block of the target has unit squared norm (flat_wigner scales
+    # degree l by sqrt(2l+1)); "uniform": all 1, which lets the high degrees dominate.
+    wigner_loss_weights: Literal["unit", "uniform"] = "unit"
+    # wignerd: "sum" adds the weighted squared errors of the 455 coefficients, "mean" divides that by 455 (torch's MSELoss default).
+    # The paper writes the sum (eq. 4) and calls it MSE, and its lr 0.1 only makes sense against one of the two scales.
+    wigner_loss_reduction: Literal["sum", "mean"] = "sum"
 
 
 @dataclass

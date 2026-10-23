@@ -125,6 +125,22 @@ poetry run python -m pose3d --path_to_datasets ... --no-backbone_bf16   # exact 
 poetry run python -m pose3d --path_to_datasets ... --no-gatr_dense_linear --no-gatr_compile --no-backbone_bf16  # as before
 ```
 
+## Flow-trajectory visualizations
+
+`pose3d/visualize_flow.py` replays the flow's Euler loop from several random rotations and draws every step: each rotation relative
+to the ground truth as an axis-angle vector in the ball of radius pi (true pose at the origin, distance = error), the angle to the true
+pose against flow time, a rotating-frame film strip, and an animation. Several checkpoints can be compared on the same images and noise.
+
+```bash
+poetry run python -m pose3d.visualize_flow --checkpoint a.pth --label GATr --checkpoint b.pth --label MLP \
+    --val_cache pascal_val.pt --out viz/
+```
+
+During training, `--log_viz` (on in the runner notebook) sends the same to W&B for `--viz_images` fixed validation images: every
+`--viz_every` epochs a predictions table (image, class, true and predicted rotation, medoid error, share of the noise samples that end
+within 15 deg) and the paths figure, and after the last epoch a film strip and an animation. Flow models only, and it needs `--run_name`.
+A run launched with `WANDB_MODE=offline` stores the media in its run folder; `wandb sync` uploads it.
+
 ## Micro and macro metrics
 
 Every reported number has two versions. Micro is pooled over all validation images, so the big

@@ -52,6 +52,20 @@ def _mlp_flow(cfg: Config, algebra) -> nn.Module:
     )
 
 
+def _wignerd(cfg: Config, algebra) -> nn.Module:
+    from pose3d.models.wignerd import WignerD
+
+    return WignerD(
+        encoder_type=cfg.model.encoder,
+        pretrained_backbone=cfg.features.pretrained_backbone,
+        lmax=cfg.i2s.lmax,
+        eval_rec_level=cfg.i2s.i2s_eval_rec_level,
+        normalize_input=cfg.i2s.i2s_normalize,
+        loss_weights=cfg.i2s.wigner_loss_weights,
+        loss_reduction=cfg.i2s.wigner_loss_reduction,
+    )
+
+
 def _i2s_real(cfg: Config, algebra) -> nn.Module:
     from pose3d.models.i2s_real import I2SReal
 
@@ -270,6 +284,7 @@ MODEL_BUILDERS: Dict[str, Callable[[Config, object], nn.Module]] = {
     "clifford_flow": _clifford_flow,
     "mlp_flow": _mlp_flow,
     "i2s_real": _i2s_real,
+    "wignerd": _wignerd,
     "i2s": _i2s,
     "ga_i2s": _ga_i2s,
     "tralalero": _tralalero,

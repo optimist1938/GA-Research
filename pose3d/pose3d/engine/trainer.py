@@ -95,13 +95,15 @@ def train_epoch(model, loader, optimizer, criterion, cfg, step=None, ema=None):
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if cfg.train.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.train.grad_clip)
 
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if cfg.train.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.train.grad_clip)
             optimizer.step()
         if ema is not None:
             ema.update_parameters(model)
@@ -129,6 +131,17 @@ def validate_epoch(model, loader, criterion, cfg):
 
     total_loss, n_objects = all_reduce_sum([total_loss, n_objects], cfg)
     return total_loss / max(n_objects, 1)
+
+
+def log_viz(model, val_loader, run, cfg, final=False, commit=False):
+    """Flow-trajectory visualizations to W&B (see engine/flow_viz.py). A failure here is reported and never stops the run."""
+    if run is None or not cfg.run.log_viz or not is_main() or not hasattr(model, "velocity"):
+        return
+    try:
+        from pose3d.engine.flow_viz import wandb_media
+        run.log(wandb_media(model, val_loader.dataset, n=cfg.run.viz_images, final=final), commit=commit)
+    except Exception as e:
+        print(f"Visualization logging skipped: {type(e).__name__}: {e}")
 
 
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg):
@@ -164,6 +177,8 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
         }
         if macro is not None:
             metrics["class_mean_median_error"] = macro["class_mean_median_error"]
+        if cfg.run.viz_every > 0 and (i + 1) % cfg.run.viz_every == 0:
+            log_viz(model, val_loader, run, cfg, commit=False)   # joins this epoch's step instead of opening one
         if run is not None:
             run.log(metrics)
         scheduler.step()
@@ -178,6 +193,10 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             log_offline_sync(run, cfg, step=i, metrics=metrics)
 
     final_evaluation(eval_model, val_loader, run, cfg, raw_model=model if ema is not None else None)
+    log_viz(eval_model, val_loader, run, cfg, final=True, commit=True)
+    if cfg.run.dataset == "symsol" and hasattr(eval_model, "grid_logits") and is_main():
+        from pose3d.engine.symsol_ll import symsol_final_log_likelihood
+        symsol_final_log_likelihood(eval_model, cfg, run)
     return eval_model
 
 

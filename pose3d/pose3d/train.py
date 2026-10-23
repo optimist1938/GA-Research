@@ -33,6 +33,8 @@ def make_algebra(algebra_dim: int = 3) -> CliffordAlgebra:
 
 def build_scheduler(optimizer, cfg: Config):
     """Linear warmup for `warmup_epochs`, then cosine decay to 5% of the base lr."""
+    if cfg.train.lr_schedule == "step":
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=cfg.train.lr_step_epochs, gamma=cfg.train.lr_step_gamma)
     warmup_epochs = cfg.train.warmup_epochs
     cosine_epochs = cfg.train.n_epochs - warmup_epochs
 
@@ -88,7 +90,10 @@ def instantiate(cfg: Config):
     model.to(cfg.device)
     model = distributed.convert_sync_bn(model, cfg)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.effective_lr)
+    if cfg.train.optimizer == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), lr=cfg.effective_lr, momentum=cfg.train.sgd_momentum, nesterov=True)
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.effective_lr)
     scheduler = build_scheduler(optimizer, cfg)
     criterion = build_criterion(cfg)
 

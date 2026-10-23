@@ -54,7 +54,7 @@ def test_metrics_record_eval_classes_without_giving_them_to_the_model():
     ds = _cache(4)
     ds.set_eval_classes([0, 0, 1, 1])
     loader = torch.utils.data.DataLoader(ds, batch_size=2)
-    cfg = SimpleNamespace(device="cpu", run=SimpleNamespace(platform="kaggle"))
+    cfg = SimpleNamespace(device=torch.device("cpu"), rank=0, run=SimpleNamespace(platform="kaggle"), features=SimpleNamespace(fixed_val_noise=False))
     err, cls = calculate_evaluation_metrics(Model(), loader, cfg, return_classes=True)
     assert cls.tolist() == [0, 0, 1, 1] and len(err) == 4
     assert seen == [None, None]
