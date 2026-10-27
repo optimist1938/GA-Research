@@ -35,7 +35,7 @@ from gpu_pool.router import (
 )
 
 CLIFFORD_REPO = "https://github.com/optimist1938/Clifford-Flow-Matching.git"
-ARC = "arc-prize-2026-arc-agi-3"        # a competition, needed for L4 / RTX 6000 / TPU
+ARC = "arc-prize-2026-arc-agi-3"        # grants RTX Pro 6000
 
 
 def _spec(**kw):
@@ -341,18 +341,58 @@ def test_competition_gated_accelerators():
     assert normalize_accelerator("L4") == "l4"
 
 
-def test_can_use_needs_a_competition_for_premium_gpus():
-    router = _fake_router([("entered", 25.0, False), ("bare", 25.0, False)])
-    entered, bare = router.statuses
-    for st in (entered, bare):
-        st.competitions_checked = True
-    entered.competitions = ["arc-prize-2026-arc-agi-3"]
+GEMMA = "gemma-4-developer-agent"     # grants the 4xL4 machine (shape NvidiaL4)
 
-    assert entered.can_use("t4") and bare.can_use("t4")        # always available
-    assert entered.can_use("l4") and entered.premium_accelerators
-    assert not bare.can_use("l4") and not bare.premium_accelerators
-    assert [s.name for s in router.available(accelerator="l4")] == ["entered"]
-    assert len(router.available(accelerator="t4")) == 2
+
+def _with_competitions(router, entered):
+    """Mark every status as competition-probed; ``entered`` maps label -> slugs."""
+    for st in router.statuses:
+        st.competitions_checked = True
+        st.competitions = list(entered.get(st.name, []))
+    return router
+
+
+def test_competitions_grant_specific_accelerators():
+    router = _with_competitions(
+        _fake_router([("rtx", 25.0, False), ("l4x4", 25.0, False),
+                      ("practice", 25.0, False), ("bare", 25.0, False)]),
+        {"rtx": [ARC], "l4x4": [GEMMA, "arc-prize-2026-paper-track"],
+         "practice": ["spaceship-titanic"]},
+    )
+    rtx, l4x4, practice, bare = router.statuses
+
+    assert all(st.can_use("t4") for st in router.statuses)      # always available
+    # ARC-AGI-3 grants RTX Pro 6000, not L4; Gemma 4 grants 4xL4, not RTX
+    assert rtx.can_use("rtx6000") and not rtx.can_use("l4")
+    assert l4x4.can_use("l4") and not l4x4.can_use("rtx6000")
+    assert l4x4.routes() == {"l4": [GEMMA]} and l4x4.competition_for("l4") == GEMMA
+    # a practice competition unlocks nothing
+    assert not practice.can_use("l4") and not practice.can_use("rtx6000")
+    assert practice.premium_accelerators == [] and bare.premium_accelerators == []
+    assert rtx.premium_accelerators == ["rtx6000"]
+    assert [s.name for s in router.available(accelerator="l4")] == ["l4x4"]
+    assert [s.name for s in router.available(accelerator="rtx6000")] == ["rtx"]
+    assert len(router.available(accelerator="t4")) == 4
+
+
+def test_a_finished_competition_grants_nothing():
+    from datetime import datetime, timedelta, timezone
+    router = _with_competitions(_fake_router([("late", 25.0, False)]), {"late": [ARC]})
+    status = router.statuses[0]
+    now = datetime.now(timezone.utc)
+    status.competition_deadlines = {ARC: now + timedelta(days=3)}
+    assert status.can_use("rtx6000")
+    status.competition_deadlines = {ARC: now - timedelta(hours=1)}
+    assert not status.can_use("rtx6000") and status.live_competitions() == []
+
+
+def test_an_observed_run_teaches_a_new_grant():
+    router = _with_competitions(_fake_router([("new", 25.0, False)]), {"new": ["brand-new-comp"]})
+    status = router.statuses[0]
+    assert not status.can_use("l4")                             # not in the table
+    status.kernels = [KernelRun("x/1", "complete", machine_shape="NvidiaL4",
+                                competitions=["brand-new-comp"])]
+    assert status.can_use("l4") and status.competition_for("l4") == "brand-new-comp"
 
 
 def test_can_use_falls_back_to_history_when_competitions_unknown():
@@ -362,33 +402,78 @@ def test_can_use_falls_back_to_history_when_competitions_unknown():
     assert not status.can_use("l4")                             # no evidence either way
     status.kernels = [KernelRun("x/1", "complete", machine_shape="NvidiaL4")]
     assert status.can_use("l4")                                 # it demonstrably ran on one
+    assert status.premium_accelerators == ["l4"]
 
 
-def test_spec_refuses_premium_accelerator_without_a_competition():
-    try:
-        _spec(accelerator="l4")
-    except ValueError as exc:
-        assert "only available inside a competition" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for l4 with no competition")
-    # with the competition cited it is fine, and it lands in the metadata
-    spec = _spec(accelerator="l4", competitions=["arc-prize-2026-arc-agi-2"])
-    meta = spec.metadata("someuser")
+def test_launcher_attaches_the_granting_competition():
+    router = _with_competitions(
+        _fake_router([("rich_bare", 30.0, False), ("lean_l4", 8.0, False)]),
+        {"lean_l4": [GEMMA]},
+    )
+    launcher = PoolLauncher(router)
+    spec = _spec(accelerator="l4")                              # no competition given
+    target = launcher.pick_account(spec, min_hours=1.0)
+    assert target.label == "lean_l4"                            # the only 4xL4 account
+    meta = launcher.for_account(spec, target).metadata("someuser")
     assert meta["machine_shape"] == "NvidiaL4"
-    assert meta["competition_sources"] == ["arc-prize-2026-arc-agi-2"]
+    assert meta["competition_sources"] == [GEMMA]
+    assert spec.competitions == []                              # caller's spec untouched
+    # a spec that already cites the grant is left alone; extra data sources are kept
+    cited = _spec(accelerator="l4", competitions=["some-data-comp", GEMMA])
+    assert launcher.for_account(cited, target).competitions == ["some-data-comp", GEMMA]
+    # an account without the grant is refused
+    try:
+        launcher.for_account(spec, router.statuses[0].account)
+    except RuntimeError as exc:
+        assert "no live competition granting 4xL4" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for an account without 4xL4")
 
 
 def test_premium_routing_only_considers_eligible_accounts():
-    router = _fake_router([("rich_bare", 30.0, False), ("lean_entered", 8.0, False)])
-    for st in router.statuses:
-        st.competitions_checked = True
-    router.statuses[1].competitions = ["arc-prize-2026-arc-agi-3"]
+    router = _with_competitions(
+        _fake_router([("rich_bare", 30.0, False), ("lean_rtx", 8.0, False),
+                      ("mid_l4", 15.0, False), ("low_l4", 5.0, False)]),
+        {"lean_rtx": [ARC], "mid_l4": ["arc-prize-2026-arc-agi-2"], "low_l4": [GEMMA]},
+    )
     launcher = PoolLauncher(router)
-    spec = _spec(accelerator="l4", competitions=["arc-prize-2026-arc-agi-3"])
-    # the richest account cannot reach an L4 at all, so the lean eligible one wins
-    assert launcher.pick_account(spec, min_hours=1.0).label == "lean_entered"
-    # and a T4 spec still prefers the richest
+    rtx_spec = _spec(accelerator="rtx6000", competitions=[ARC])
+    assert launcher.pick_account(rtx_spec, min_hours=1.0).label == "lean_rtx"
+    # either L4 competition qualifies, so the richer one wins...
+    assert launcher.pick_account(_spec(accelerator="l4"), min_hours=1.0).label == "mid_l4"
+    # ...unless the spec names the competition it must run under
+    gemma_spec = _spec(accelerator="l4", competitions=[GEMMA])
+    assert launcher.pick_account(gemma_spec, min_hours=1.0).label == "low_l4"
+    # a T4 spec still prefers the richest
     assert launcher.pick_account(_spec(accelerator="t4"), min_hours=1.0).label == "rich_bare"
+
+
+def test_l4x4_needs_twice_the_quota():
+    router = _with_competitions(
+        _fake_router([("l4_short", 10.0, False), ("l4_long", 14.0, False)]),
+        {"l4_short": [GEMMA], "l4_long": [GEMMA]},
+    )
+    launcher = PoolLauncher(router)
+    # 6 wall-clock hours on 4xL4 cost 12 quota-hours: only the 14 h account qualifies
+    assert launcher.pick_account(_spec(accelerator="l4"), min_hours=6.0).label == "l4_long"
+    try:
+        launcher.pick_account(_spec(accelerator="l4"), min_hours=8.0)
+    except RuntimeError as exc:
+        assert ">=16.0 spare gpu-hours" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError: 8 h of 4xL4 needs 16 quota-hours")
+
+
+def test_report_lists_competition_only_gpus_per_account():
+    router = _with_competitions(
+        _fake_router([("rtx", 25.0, False), ("l4x4", 20.0, False), ("practice", 10.0, False)]),
+        {"rtx": [ARC], "l4x4": [GEMMA], "practice": ["spaceship-titanic"]},
+    )
+    text = router.report()
+    assert "RTX Pro 6000 via %s" % ARC in text
+    assert "4xL4 via %s" % GEMMA in text
+    assert "none (T4 / P100 only)" in text
+    assert "4xL4 on 1 account(s), RTX Pro 6000 on 1 account(s)" in text
 
 
 def test_cli_json_treats_no_results_as_empty():

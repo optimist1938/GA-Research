@@ -28,6 +28,7 @@ CLI
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -41,23 +42,34 @@ from typing import Any, Dict, List, Optional, Sequence
 try:  # package import
     from .router import (
         ACTIVE_STATES,
+        COMPETITION_ACCELERATORS,
+        AccountStatus,
         PoolAccount,
         CliError,
         PoolRouter,
+        accelerator_name,
+        normalize_accelerator,
+        quota_rate,
         requires_competition,
     )
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from gpu_pool.router import (
         ACTIVE_STATES,
+        COMPETITION_ACCELERATORS,
+        AccountStatus,
         PoolAccount,
         CliError,
         PoolRouter,
+        accelerator_name,
+        normalize_accelerator,
+        quota_rate,
         requires_competition,
     )
 
 #: Friendly alias -> Kaggle ``machineShape`` value. ``None`` means CPU only.
-#: ``t4``/``p100``/``l4``/``rtx6000`` are confirmed working; TPU values are accepted by
+#: ``t4``/``p100``/``l4``/``rtx6000`` are confirmed working (``l4`` is the 4xL4 machine of the
+#: Gemma 4 and ARC-AGI-2 competitions); TPU values are accepted by
 #: the push API but currently provision a non-TPU image (Kaggle/kaggle-cli#1197), and
 #: there is no value for the editor's "GPU T4 x2" (Kaggle/kaggle-cli#1196).
 ACCELERATORS: Dict[str, Optional[str]] = {
@@ -135,12 +147,9 @@ class NotebookSpec:
                 % (self.accelerator, ", ".join(sorted(ACCELERATORS)))
             )
         self.slug = self.slug or _slugify(self.title)
-        if requires_competition(self.accelerator) and not self.competitions:
-            raise ValueError(
-                "accelerator %r is only available inside a competition: pass competitions=["
-                "'<competition-slug>'] so the kernel cites it in competition_sources, and use an "
-                "account that has entered it" % self.accelerator
-            )
+        # A competition-gated accelerator (L4 / RTX Pro 6000 / TPU) also needs the granting
+        # competition in ``competitions``; PoolLauncher adds the target account's own when
+        # none is given (see PoolLauncher.for_account).
 
     # -- machine ----------------------------------------------------------------------
     @property
@@ -434,6 +443,52 @@ class PoolLauncher:
     def __init__(self, router: PoolRouter) -> None:
         self.router = router
 
+    # -- competition-gated accelerators -----------------------------------------------
+    def grant_filter(self, spec: NotebookSpec) -> Dict[str, Any]:
+        """``PoolRouter.available`` keyword filters for ``spec``'s accelerator.
+
+        Empty for T4/P100/CPU. For a gated accelerator, accounts must reach it, and if
+        ``spec`` already cites competitions that grant it, through one of those.
+        """
+        if not requires_competition(spec.accelerator):
+            return {}
+        accel = normalize_accelerator(spec.accelerator)
+        grants = set(COMPETITION_ACCELERATORS.get(accel, ()))
+        for status in self.router.statuses:
+            grants.update(status.routes().get(accel, []))
+        return {"accelerator": accel, "competitions": [c for c in spec.competitions if c in grants]}
+
+    def _status_of(self, account: PoolAccount) -> Optional[AccountStatus]:
+        return next((s for s in self.router.statuses if s.name == account.name), None)
+
+    def for_account(self, spec: NotebookSpec, account: PoolAccount) -> NotebookSpec:
+        """``spec`` citing the competition that grants its accelerator on ``account``.
+
+        Returned unchanged when the accelerator is not gated or ``spec`` already cites one of
+        the account's granting competitions; otherwise that competition is appended.
+        """
+        if not requires_competition(spec.accelerator):
+            return spec
+        accel = normalize_accelerator(spec.accelerator)
+        status = self._status_of(account)
+        if status is None or not status.competitions_checked:
+            if spec.competitions:
+                return spec
+            raise ValueError(
+                "%s is only available inside a competition and %s's competitions were not "
+                "probed: pass competitions=['<slug>'] or probe with with_competitions=True"
+                % (accelerator_name(accel), account.name)
+            )
+        routes = status.routes().get(accel, [])
+        if any(c in routes for c in spec.competitions):
+            return spec
+        if not routes:
+            raise RuntimeError(
+                "account %s has no live competition granting %s"
+                % (account.name, accelerator_name(accel))
+            )
+        return dataclasses.replace(spec, competitions=list(spec.competitions) + [routes[0]])
+
     # -- routing ----------------------------------------------------------------------
     def pick_account(
         self,
@@ -442,7 +497,11 @@ class PoolLauncher:
         require_idle: bool = False,
         account: Optional[str] = None,
     ) -> PoolAccount:
-        """Choose the target account, or raise with the reason none qualified."""
+        """Choose the target account, or raise with the reason none qualified.
+
+        ``min_hours`` is wall-clock run time; it is converted to quota-hours with
+        :func:`quota_rate`, so a 6 h 4xL4 run needs 12 spare GPU-hours.
+        """
         statuses = self.router.statuses
         if account:
             for status in statuses:
@@ -464,19 +523,22 @@ class PoolLauncher:
             candidates.sort(key=lambda s: (s.busy, -s.gpu.remaining_h))
             return candidates[0].account
 
+        gate = self.grant_filter(spec)
         candidates = self.router.available(
-            min_gpu_hours=min_hours,
+            min_gpu_hours=min_hours * quota_rate(spec.accelerator),
             resource=spec.resource,
             require_idle=require_idle,
-            accelerator=spec.accelerator if requires_competition(spec.accelerator) else None,
+            **gate,
         )
         if not candidates:
             raise RuntimeError(
-                "no account has >=%.1f spare %s-hours%s (pool total %.1fh)"
+                "no account has >=%.1f spare %s-hours%s%s (pool total %.1fh)"
                 % (
-                    min_hours,
+                    min_hours * quota_rate(spec.accelerator),
                     spec.resource,
                     " while idle" if require_idle else "",
+                    (" and a live competition granting %s" % accelerator_name(spec.accelerator))
+                    if gate else "",
                     self.router.total_remaining_hours(spec.resource),
                 )
             )
@@ -493,6 +555,8 @@ class PoolLauncher:
     ) -> LaunchHandle:
         """Push ``spec`` to the best available account and start it running."""
         target = self.pick_account(spec, min_hours, require_idle, account)
+        requested = spec
+        spec = self.for_account(requested, target)
 
         if dry_run:
             print(json.dumps({"target": target.username,
@@ -502,6 +566,7 @@ class PoolLauncher:
         tried: List[str] = []
         while True:
             username = self.router.username(target)
+            spec = self.for_account(requested, target)
             with tempfile.TemporaryDirectory(prefix="kaggle-push-") as bundle:
                 spec.write_bundle(username, bundle)
                 proc = self.router.run_cli(
@@ -535,9 +600,9 @@ class PoolLauncher:
             pool.sort(key=lambda s: (s.busy, -s.gpu.remaining_h))
         else:
             pool = self.router.available(
-                min_gpu_hours=min_hours,
+                min_gpu_hours=min_hours * quota_rate(spec.accelerator),
                 resource=spec.resource,
-                accelerator=spec.accelerator if requires_competition(spec.accelerator) else None,
+                **self.grant_filter(spec),
             )
         for status in pool:
             if status.username not in exclude:
@@ -550,7 +615,9 @@ class PoolLauncher:
         for spec in specs:
             target = None
             for status in self.router.available(
-                min_gpu_hours=kwargs.get("min_hours", 1.0), resource=spec.resource
+                min_gpu_hours=kwargs.get("min_hours", 1.0) * quota_rate(spec.accelerator),
+                resource=spec.resource,
+                **self.grant_filter(spec),
             ):
                 if status.username not in used:
                     target = status.username
@@ -586,14 +653,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--competition",
         action="append",
         default=[],
-        help="competition slug to attach (repeatable); required for L4 / RTX Pro 6000 / TPU",
+        help="competition slug to attach (repeatable); for L4 / RTX Pro 6000 / TPU the target "
+        "account's granting competition is attached automatically when none is given",
     )
     parser.add_argument("--secret", action="append", default=[], help="required Kaggle secret")
     parser.add_argument("--github-token-secret")
     parser.add_argument("--public", action="store_true", help="make the kernel public")
     parser.add_argument("--no-internet", action="store_true")
     parser.add_argument("--account", help="force a specific pool account")
-    parser.add_argument("--min-hours", type=float, default=1.0)
+    parser.add_argument(
+        "--min-hours", type=float, default=1.0,
+        help="wall-clock hours the run needs; 4xL4 needs twice that in spare GPU quota",
+    )
     parser.add_argument("--idle-only", action="store_true")
     parser.add_argument("--wait", type=float, default=0.0, help="seconds to wait for completion")
     parser.add_argument("--dry-run", action="store_true")
@@ -633,7 +704,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
 
     router = PoolRouter.from_dir(args.tokens_dir)
-    router.probe_all()
+    # Gated accelerators are routed by which competitions each account has entered.
+    router.probe_all(with_competitions=requires_competition(spec.accelerator))
     launcher = PoolLauncher(router)
     handle = launcher.launch(
         spec,
@@ -645,7 +717,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.dry_run:
         return 0
 
-    print("launched %s on %s (%s)" % (spec.title, handle.account.name, spec.accelerator))
+    print("launched %s on %s (%s%s)" % (
+        spec.title, handle.account.name, accelerator_name(spec.accelerator),
+        " via " + ", ".join(handle.spec.competitions) if handle.spec.competitions else ""))
     print(handle.url)
     if args.wait:
         state = handle.wait(timeout=args.wait)

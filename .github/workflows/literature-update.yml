@@ -1,0 +1,97 @@
+name: Literature sweep
+
+# Daily sweep of arXiv, OpenReview, Crossref and INSPIRE-HEP for new Clifford / geometric-algebra
+# machine-learning papers. New candidates land in the *inbox* of literature/papers.yaml (nothing is accepted
+# automatically), the rendered page and catalogue are regenerated, the result is committed to main and the
+# page is redeployed to GitHub Pages. Review the inbox on the live page or with `python -m ga_lit inbox`.
+# See literature/README.md.
+
+on:
+  schedule:
+    - cron: "23 5 * * *"   # daily at 05:23 UTC, after arXiv's nightly announcement (00:00 UTC)
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Start of the window (YYYY-MM-DD). Default: last run minus 7 days."
+        required: false
+      until:
+        description: "End of the window (YYYY-MM-DD). Default: today."
+        required: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: literature-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Run the sweep
+        working-directory: literature
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.since }}" ]; then ARGS="$ARGS --since ${{ inputs.since }}"; fi
+          if [ -n "${{ inputs.until }}" ]; then ARGS="$ARGS --until ${{ inputs.until }}"; fi
+          python -m ga_lit update $ARGS 2> >(grep -v '^  ' >&2)
+          python -m ga_lit validate
+          {
+            echo "## Literature sweep $(date -u +%F)"
+            echo
+            python -m ga_lit stats
+            echo
+            python -m ga_lit inbox --markdown
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit the result to main
+        id: commit
+        run: |
+          git config user.name "literature-sweep[bot]"
+          git config user.email "literature-sweep@users.noreply.github.com"
+          git add literature/papers.yaml literature/state.yaml literature/site/index.html literature/catalog.md
+          if git diff --cached --quiet -- literature/papers.yaml literature/site/index.html literature/catalog.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No new papers; only state.yaml moved." 
+            git commit -q -m "Literature sweep $(date -u +%F): no new candidates" || true
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            N=$(python -c 'import yaml;print(sum(1 for r in yaml.safe_load(open("literature/papers.yaml")) if r.get("status")=="inbox"))')
+            git commit -q -m "Literature sweep $(date -u +%F): $N candidate(s) waiting in the inbox"
+          fi
+          git pull --rebase -q origin main
+          git push -q origin HEAD:main
+
+  deploy:
+    # Pushes made with the workflow token do not trigger pages.yml, so the page is redeployed here.
+    # Needs the one-time repository setting: Settings -> Pages -> Source: GitHub Actions.
+    needs: sweep
+    if: needs.sweep.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: literature/site
+      - id: deployment
+        uses: actions/deploy-pages@v4

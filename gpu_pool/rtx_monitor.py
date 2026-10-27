@@ -1,4 +1,4 @@
-"""Sync no-internet (RTX / L4 / TPU) Kaggle runs to W&B by tailing their logs.
+"""Sync no-internet (RTX / 4xL4 / TPU) Kaggle runs to W&B by tailing their logs.
 
 A Kaggle kernel with internet disabled can't reach wandb.ai, so `pose3d`'s trainer prints one
 grep-able JSON line per epoch instead (``WANDB_SYNC ...`` / ``WANDB_SYNC_FINAL ...``, see
@@ -34,15 +34,16 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 try:  # package import
-    from .router import KernelRun, PoolRouter, shape_label
+    from .router import GATED_ACCELERATORS, KernelRun, PoolRouter, normalize_accelerator
 except ImportError:  # run as a script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from gpu_pool.router import KernelRun, PoolRouter, shape_label
+    from gpu_pool.router import GATED_ACCELERATORS, KernelRun, PoolRouter, normalize_accelerator
 
 #: Accelerators this monitor watches. T4/P100/CPU runs sync to wandb.ai on their own and are
 #: never touched here -- that's the "must not spoil T4 runs" requirement, satisfied by simply
-#: never looking at them.
-DEFAULT_ACCELERATORS = ("rtx6000", "l4", "tpu-v3", "tpu-v5e")
+#: never looking at them. Every competition-gated accelerator the router knows (RTX Pro 6000,
+#: 4xL4, TPU) runs with internet disabled, so all of them are watched.
+DEFAULT_ACCELERATORS = GATED_ACCELERATORS
 
 _LINE_RE = re.compile(r"^(WANDB_SYNC_FINAL|WANDB_SYNC) (\{.*\})\s*$", re.MULTILINE)
 
@@ -211,7 +212,7 @@ class DryRunSink:
 # --------------------------------------------------------------------------------------
 def premium_kernels(router: PoolRouter, accelerators: Sequence[str]) -> List[tuple]:
     """``(account, KernelRun)`` for every active kernel on one of ``accelerators``."""
-    wanted = {shape_label(a) if a not in DEFAULT_ACCELERATORS else a for a in accelerators}
+    wanted = {normalize_accelerator(a) for a in accelerators}
     out = []
     for status in router.statuses:
         if not status.ok:
@@ -303,7 +304,7 @@ def run_once(
 # --------------------------------------------------------------------------------------
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Tail no-internet (RTX/L4/TPU) Kaggle runs and sync them to W&B.",
+        description="Tail no-internet (RTX/4xL4/TPU) Kaggle runs and sync them to W&B.",
     )
     parser.add_argument("--tokens-dir", default=os.environ.get("KAGGLE_TOKENS_DIR"))
     parser.add_argument("--state-file", default=DEFAULT_STATE_FILE)

@@ -7,6 +7,10 @@ Geometric-algebra (Clifford) research experiments, one folder per experiment fam
 | [`pose3d/`](pose3d/) | Image-conditioned 3D pose (SO(3)) estimation: Clifford Flow vs Image2Sphere, IPDF, matrix Fisher | active |
 | [`dpd/`](dpd/) | dpd | new |
 
+Cross-experiment literature lives in [`literature/`](literature/): a YAML paper database of Clifford / geometric-algebra
+deep-learning papers, a browsable [search page](https://chagrygoris.github.io/GA-Research/) (GitHub Pages; source `literature/site/index.html`), a generated [catalogue](literature/catalog.md)
+and a daily sweep that files new candidates into an inbox (see [`literature/README.md`](literature/README.md)).
+
 Each experiment folder is a self-contained Poetry project. `main` always holds the reference recipe
 of every experiment; experiments in progress live on branches until they are proven.
 

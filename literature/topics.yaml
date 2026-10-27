@@ -1,0 +1,43 @@
+# Topic taxonomy for literature/papers.yaml. The first topic of a paper is its primary shelf in catalog.md.
+survey:
+  name: Surveys, reviews and position papers
+  description: Overviews of geometric-algebra (GA) neural networks and essays arguing for GA as a representation.
+architecture:
+  name: New GA / Clifford architectures
+  description: General-purpose layers and models whose weights or activations are multivectors.
+theory:
+  name: Theory and analysis of GA layers
+  description: Expressivity, identifiability, group-theoretic and optimisation studies of GA networks.
+scientific-ml:
+  name: Scientific machine learning
+  description: Molecules, materials, PDE surrogates, fluids, geoscience and lattice field theory.
+hep:
+  name: High-energy physics
+  description: The Lorentz-equivariant geometric algebra transformer (L-GATr) line and other spacetime-algebra models.
+vision:
+  name: Vision, remote sensing and medical imaging
+  description: Image backbones, hyperspectral classification, registration, segmentation and enhancement.
+graphs:
+  name: Graphs, multimodal and representation learning
+  description: Graph neural networks, sheaves, binding / vector-symbolic representations with Clifford structure.
+robotics:
+  name: Robotics, driving and control learning
+  description: Policies, scene models and pose pipelines built on projective or conformal GA.
+wireless:
+  name: Wireless channels and neural fields
+  description: GA attention inside neural radiance fields and Gaussian splatting for radio propagation.
+sequence-nlp:
+  name: Sequence models, language and LLM tooling
+  description: Rotor-based recurrences, time-series forecasters, semantics and GA-aware language-model tools.
+clifford-valued-dynamics:
+  name: Clifford-valued network dynamics
+  description: Stability and synchronisation theory of recurrent networks with Clifford-number states (control theory).
+hypercomplex:
+  name: Hypercomplex-valued networks
+  description: Quaternion, biquaternion and general hypercomplex layers framed as Clifford algebras.
+other-ml:
+  name: Other machine-learning uses of GA
+  description: Classifiers, filters, causal discovery and quantum machine learning built on GA.
+software:
+  name: Software and resources
+  description: Libraries, curated lists and theme issues.

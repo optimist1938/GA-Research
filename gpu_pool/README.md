@@ -149,11 +149,35 @@ notebook use `NotebookSpec(title=..., notebook_path="run.ipynb", accelerator="l4
 | `cpu` / `none` | *(omitted)* | No accelerator quota consumed |
 | `t4` | `NvidiaTeslaT4` | Confirmed in use across the pool |
 | `p100` | `NvidiaTeslaP100` | Default image's torch may lack `sm_60` kernels |
-| `l4` | `NvidiaL4` | Confirmed |
+| `l4` | `NvidiaL4` | Confirmed. The **4xL4** machine (96 GB GPU memory in total); costs **2x** quota per hour |
 | `rtx6000` | `NvidiaRtxPro6000` | Confirmed |
 | `tpu-v3` / `tpu-v5e` | `Tpu1VmV38` / `TpuV5E8` | **Accepted but silently non-TPU** ([#1197](https://github.com/Kaggle/kaggle-cli/issues/1197)) |
 
 There is no value for the editor's "GPU T4 ×2" ([#1196](https://github.com/Kaggle/kaggle-cli/issues/1196)).
+
+## Competition-only GPUs
+
+Outside a competition Kaggle offers only T4 and P100. Every other accelerator is granted by a
+**specific competition**, and only to a kernel that cites it in `competition_sources`:
+
+| Accelerator | Granted by (`COMPETITION_ACCELERATORS` in `router.py`) |
+|---|---|
+| `rtx6000` | `arc-prize-2026-arc-agi-3`, `nvidia-nemotron-model-reasoning-challenge` |
+| `l4` (4xL4) | `gemma-4-developer-agent`, `arc-prize-2026-arc-agi-2` |
+
+A practice competition (e.g. `spaceship-titanic`) grants nothing, and a competition past its
+deadline (taken from `kaggle competitions list`) grants nothing either. Add a row when a new
+competition brings hardware. Until then the router also learns grants from the pool itself: a
+kernel seen running on a gated accelerator while citing a competition counts as proof that the
+competition grants it.
+
+`python gpu_pool/router.py --competitions` lists, per account, which of these GPUs it can reach
+and through which competition. When launching on a gated accelerator without `--competition`,
+the launcher picks an account that can reach it and attaches that account's granting
+competition itself; pass `--competition SLUG` to pin the run to one competition.
+
+`--min-hours` is wall-clock run time. It is converted to quota-hours with `QUOTA_RATE`
+(`router.py`), so a 6 h run on 4xL4 needs 12 spare GPU-hours.
 
 ## Secrets are per-account and cannot be provisioned via the API
 
@@ -190,8 +214,42 @@ for line in filter_progress(handle.log(follow=True), keep_last=10):
 There is no cancel: neither the CLI nor the API exposes one, so `handle.cancel()` raises and
 points at the notebook page instead.
 
+## Moon Cluster page: `moon_cluster.py`
+
+The Moon Cluster page is a one-file HTML view of the pool drawn as a night-sky dial: accounts on
+the outer orbit with quota gauges, the competitions that grant premium GPUs on the inner orbit, and
+the hardware around a moon that shows the spare GPU-hours. It is published as an Artifact at
+https://claude.ai/artifact/Y7cgZp5Kdbe1or38mdDPZd.
+
+It is built in two steps so that an agent (or a person) can change anything in between:
+
+1. **Snapshot**: a plain JSON dict with the accounts (quota, active runs, competition routes and
+   whether each route was seen in a real run), competition deadlines and free-form notes. It never
+   contains credentials. `probe_snapshot(DIR)` builds one from a live probe.
+2. **Render**: `render(snapshot, previous)` fills `moon_cluster_template.html`. The dial layout
+   (account order, competition and hardware positions) is computed from the data. The page embeds
+   its snapshot, so the published page is the `previous` input of the next render, and the cards
+   under the dial (new account, new route, removed, awaiting token, hardware ending soon) come
+   from comparing the two.
+
+```bash
+python gpu_pool/moon_cluster.py --tokens-dir ~/pool_tokens --previous last.html --out moon_cluster.html
+python gpu_pool/moon_cluster.py --tokens-dir DIR --dump-snapshot snap.json   # probe only, then edit
+python gpu_pool/moon_cluster.py --from-snapshot snap.json --out moon_cluster.html
+```
+
+`--note "KICKER|Title|Text"` adds a card, `--removed account7=deleted` leaves an account out and
+shows it as removed, and `--title` / `--subtitle` rename the page. In the credentials directory, a
+folder without a `token` is shown as *awaiting token*, and a folder tagged like
+`account7_Name[suspended]` as removed.
+
+Agents follow the `moon-cluster` skill (`.claude/skills/moon-cluster/SKILL.md`) to refresh and
+republish the page.
+
 ## Tests
 
 ```bash
-python3 gpu_pool/test_gpu_pool.py     # 31 offline tests, no network or credentials
+python3 gpu_pool/test_gpu_pool.py     # 37 offline tests, no network or credentials
+python3 gpu_pool/test_rtx_monitor.py  # 11 offline tests for the no-internet W&B sync
+python3 gpu_pool/test_moon_cluster.py # 11 offline tests for the Moon Cluster page
 ```

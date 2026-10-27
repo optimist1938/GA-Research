@@ -1,0 +1,447 @@
+<title>{{TITLE}}</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: a night-sky instrument dial. Accounts ride the outer orbit with quota gauges, competitions
+   sit on the inner orbit, hardware circles a silver moon at the hub; a readout panel beside it.
+   Deliberately single-theme: the subject is a night sky, so it stays dark on every host. */
+:root {
+  --sky: #060a1a;
+  --sky-2: #0d1433;
+  --glass: rgba(15, 22, 52, .72);
+  --surface: #0f1634;
+  --ink: #eaedf7;
+  --muted: #8f9bbd;
+  --faint: #232d55;
+  --moon: #e7e9f2;
+  --moon-shade: #aab1c9;
+  --rtx: #5ee6c1;
+  --l4: #f4c46b;
+  --tpu: #b9a2ff;
+  --open: #8fa4cc;
+  --hot: #ff8a6b;
+  --x1: #ff9fd0;
+  --x2: #8fe3ff;
+  --x3: #c8f07a;
+  --font-title: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+  --font-display: "Chakra Petch", "Arial Narrow", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+h1, h2, h3, .t-hub { font-variant-numeric: lining-nums; }
+body {
+  background: radial-gradient(120% 80% at 70% -10%, var(--sky-2), var(--sky) 60%) fixed, var(--sky);
+  color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+}
+#stars { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+
+.page {
+  position: relative; z-index: 1;
+  max-width: 1320px; margin: 0 auto; display: grid; gap: 26px;
+  padding-block: 34px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.masthead { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 32px; }
+.brand { display: flex; align-items: center; gap: 16px; }
+.brand svg { width: 54px; height: 54px; flex: none; filter: drop-shadow(0 0 14px rgba(231, 233, 242, .35)); }
+.masthead h1 { font-family: var(--font-title); font-weight: 600; font-size: clamp(42px, 6vw, 72px); line-height: .9; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.masthead h1 em { font-style: italic; font-weight: 500; color: var(--muted); font-size: .5em; letter-spacing: .04em; margin-left: 10px; }
+.stamp { font-family: var(--font-data); font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; display: grid; gap: 2px; text-align: right; }
+.stamp b { color: var(--ink); font-weight: 600; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 22px; align-items: start; }
+@media (max-width: 1040px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+.dial {
+  background: radial-gradient(circle at 50% 50%, rgba(40, 52, 110, .35) 0 30%, transparent 62%), var(--glass);
+  border: 1px solid var(--faint); border-radius: 24px; overflow-x: auto; min-width: 0;
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.dial svg { display: block; width: 100%; min-width: 660px; height: auto; }
+svg text { fill: var(--ink); }
+.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; stroke-opacity: .9; }
+.t-acct { font: 600 13.5px var(--font-body); }
+.t-meta { font: 500 10.5px var(--font-data); fill: var(--muted); letter-spacing: .02em; }
+.t-gauge { font: 600 11.5px var(--font-data); }
+.t-comp { font: 600 14px var(--font-display); letter-spacing: .02em; }
+.t-hw { font: 700 15px var(--font-display); letter-spacing: .02em; }
+.t-hwc { font: 500 10px var(--font-data); fill: var(--muted); }
+.t-hub { font: 600 36px var(--font-title); fill: #1a2140; }
+.t-hubs { font: 600 9.5px var(--font-data); fill: #3a4366; letter-spacing: .14em; }
+.t-ring { font: 600 10.5px var(--font-data); letter-spacing: .32em; fill: var(--open); }
+.link { fill: none; stroke-linecap: round; transition: opacity .18s; }
+.node { cursor: pointer; transition: opacity .18s; }
+.node:focus { outline: none; }
+.node:focus-visible .focus-ring { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.focus-ring { fill: none; stroke: transparent; }
+svg.dim .link:not(.on), svg.dim .node:not(.on) { opacity: .12; }
+.orbit { animation: spin 9s linear infinite; transform-box: view-box; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.readout { background: var(--glass); border: 1px solid var(--faint); border-radius: 24px; padding: 22px; display: grid; gap: 18px; min-width: 0; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.readout .kicker { font-family: var(--font-data); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.readout h2 { font-family: var(--font-title); font-weight: 600; font-size: 34px; line-height: 1; margin: 2px 0 0; text-wrap: balance; }
+.readout .sub { font-family: var(--font-data); font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+.big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.big b { font-family: var(--font-display); font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.big span { color: var(--muted); font-size: 14px; }
+.bar { height: 8px; border-radius: 4px; background: var(--faint); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 4px; }
+.rows { display: grid; gap: 10px; }
+.row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 14px; }
+.row .chip { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.row .num { font-family: var(--font-data); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.row .lbl { min-width: 0; }
+.row .lbl small { display: block; color: var(--muted); font-size: 12px; }
+.tag { display: inline-block; font-family: var(--font-data); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.hint { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--faint); padding-top: 14px; }
+.readout p { margin: 0; font-size: 14px; color: var(--muted); }
+.readout code { font-family: var(--font-data); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+
+.changes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--faint); border: 1px solid var(--faint); border-radius: 18px; overflow: hidden; }
+.change { background: var(--glass); padding: 16px 18px; display: grid; gap: 4px; min-width: 0; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.change .kicker { font-family: var(--font-data); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; }
+.change h3 { font-family: var(--font-title); font-size: 23px; font-weight: 600; margin: 0; line-height: 1.1; }
+.change p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.change code { font-family: var(--font-data); font-size: 12px; color: var(--ink); }
+.foot { font-size: 12.5px; color: var(--muted); }
+.foot code { font-family: var(--font-data); font-size: 11.5px; }
+@media (prefers-reduced-motion: reduce) { .orbit { animation: none; } .link, .node { transition: none; } }
+</style>
+
+<canvas id="stars" aria-hidden="true"></canvas>
+<div class="page">
+  <header class="masthead">
+    <div class="brand">
+      <svg viewBox="0 0 54 54" aria-hidden="true">
+        <defs><mask id="crescent"><rect width="54" height="54" fill="#fff"/><circle cx="35" cy="20" r="19" fill="#000"/></mask></defs>
+        <circle cx="27" cy="27" r="22" fill="var(--moon)" mask="url(#crescent)"/>
+      </svg>
+      <h1>{{TITLE}}{{SUBTITLE}}</h1>
+    </div>
+    <div class="stamp">{{STAMP}}</div>
+  </header>
+
+  <section class="stage">
+    <div class="dial"><svg id="dial" viewBox="0 0 1040 940" role="img" aria-labelledby="dial-title"><title id="dial-title">{{TITLE}} accounts on the outer ring, the competitions that grant GPUs on the inner ring, and the hardware at the hub</title></svg></div>
+    <aside class="readout" id="readout" aria-live="polite"></aside>
+  </section>
+
+{{CHANGES}}
+
+  <p class="foot">Source: <code>python gpu_pool/router.py --competitions --accelerators</code> on the live cluster. Solid lines are routes seen in a real run; dashed lines come from the competition rules only. Each account has one weekly GPU budget that pays for every GPU type.{{FOOT}}</p>
+</div>
+
+<script type="application/json" id="moon-data">{{DATA}}</script>
+<script>
+(function () {
+  // Everything below is drawn from this snapshot, written by gpu_pool/moon_cluster.py.
+  const DATA = JSON.parse(document.getElementById("moon-data").textContent);
+  const HW = DATA.hardware;
+  const COMPS = DATA.competitions;
+  // routes: "seen" = observed in a real run, "rules" = from the competition's rules only
+  const ACCTS = DATA.accounts;
+  const HW_ANGLE = DATA.hardware_angles;
+  const SLOTS = DATA.meta.max_concurrent;
+  const comp = (id) => COMPS.find(c => c.id === id);
+  const hwOf = (a) => [...new Set(Object.keys(a.routes).map(r => comp(r).hw))];
+  const live = ACCTS.filter(a => !a.pending);
+  const spare = live.reduce((s, a) => s + a.h, 0);
+
+  // ---------- geometry ----------
+  const CX = 520, CY = 470, R1 = 322, R2 = 212, R3 = 104;
+  const pol = (r, deg) => { const t = deg * Math.PI / 180; return [CX + r * Math.cos(t), CY + r * Math.sin(t)]; };
+  ACCTS.forEach((a, i) => { a.angle = -90 + i * 360 / ACCTS.length; [a.x, a.y] = pol(R1, a.angle); });
+  COMPS.forEach(c => { [c.x, c.y] = pol(R2, c.angle); });
+  const reach = (hw) => hw === "open" ? live : live.filter(a => hwOf(a).includes(hw));
+  const HWN = {};
+  Object.keys(HW_ANGLE).forEach(k => { const [x, y] = pol(R3, HW_ANGLE[k]); HWN[k] = { x, y, r: 24 + reach(k).length * 3.4 }; });
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById("dial");
+  const el = (tag, attrs, parent, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    (parent || svg).appendChild(e);
+    return e;
+  };
+  const v = (t) => `var(${t})`;
+  const registry = [];
+  const reg = (node, keys) => { registry.push({ el: node, keys: new Set(keys) }); return node; };
+
+  // ---------- dial furniture ----------
+  const furniture = el("g", {});
+  el("circle", { cx: CX, cy: CY, r: R2, fill: "none", stroke: v("--muted"), "stroke-opacity": .35, "stroke-width": 1, "stroke-dasharray": "1 6", "stroke-linecap": "round" }, furniture);
+  el("circle", { cx: CX, cy: CY, r: R3, fill: "none", stroke: v("--muted"), "stroke-opacity": .3, "stroke-width": 1, "stroke-dasharray": "1 5", "stroke-linecap": "round" }, furniture);
+  for (let d = 0; d < 360; d += 3) {
+    const major = d % 30 === 0;
+    const [x1, y1] = pol(R1 - 52, d - 90), [x2, y2] = pol(R1 - (major ? 64 : 57), d - 90);
+    el("line", { x1, y1, x2, y2, stroke: v(major ? "--muted" : "--faint"), "stroke-width": major ? 1.4 : 1 }, furniture);
+  }
+  // the T4 / P100 bus: every account sits on it
+  el("circle", { cx: CX, cy: CY, r: R1, fill: "none", stroke: v("--open"), "stroke-width": 2.2, "stroke-opacity": .55 }, furniture);
+  // lettering runs along the arc where no competition sits, kept upright on either half
+  const BUS = DATA.meta.bus_center, top = Math.sin(BUS * Math.PI / 180) < -0.2;
+  const RB = top ? R1 - 44 : R1 - 30;  // glyphs stand outward on the top half, so sit lower there
+  const [ax, ay] = pol(RB, top ? BUS - 70 : BUS + 70), [bx, by] = pol(RB, top ? BUS + 70 : BUS - 70);
+  el("path", { id: "busText", d: `M${ax},${ay} A${RB},${RB} 0 0 ${top ? 1 : 0} ${bx},${by}`, fill: "none" }, furniture);
+  const bt = el("text", { class: "t-ring" }, furniture);
+  el("textPath", { href: "#busText", startOffset: "50%", "text-anchor": "middle" }, bt, "T4 · P100 — OPEN TO EVERY ACCOUNT");
+
+  const links = el("g", {});
+  const nodes = el("g", {});
+
+  const curve = (x1, y1, c1, c2, x2, y2) => `M${x1},${y1} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${x2},${y2}`;
+  const glowLine = (d, color, w, dashed, keys) => {
+    const g = reg(el("g", { class: "link" }, links), keys);
+    el("path", { d, fill: "none", stroke: v(color), "stroke-width": w + 7, "stroke-opacity": .1, "stroke-linecap": "round" }, g);
+    const p = el("path", { d, fill: "none", stroke: v(color), "stroke-width": w, "stroke-opacity": .9, "stroke-linecap": "round" }, g);
+    if (dashed) p.setAttribute("stroke-dasharray", "2 7");
+    return g;
+  };
+
+  // competition -> hardware
+  COMPS.forEach(c => {
+    const h = HWN[c.hw];
+    const n = live.filter(a => c.id in a.routes).length;
+    const keys = ["c:" + c.id, "h:" + c.hw, ...live.filter(a => c.id in a.routes).map(a => "a:" + a.n)];
+    glowLine(curve(c.x, c.y, pol(R2 - 60, c.angle), pol(R3 + 50, HW_ANGLE[c.hw]), h.x, h.y), HW[c.hw].color, 2 + n * 1.1, false, keys);
+  });
+  // account -> competition
+  ACCTS.forEach(a => {
+    Object.entries(a.routes).forEach(([cid, how]) => {
+      const c = comp(cid);
+      const keys = ["a:" + a.n, "c:" + cid, "h:" + c.hw];
+      glowLine(curve(a.x, a.y, pol(R1 - 95, a.angle), pol(R2 + 70, c.angle), c.x, c.y), HW[c.hw].color, 2.4, how === "rules", keys);
+    });
+  });
+
+  // ---------- account nodes ----------
+  ACCTS.forEach(a => {
+    const hw = hwOf(a);
+    const keys = ["a:" + a.n, "h:open", ...Object.keys(a.routes).map(c => "c:" + c), ...hw.map(h => "h:" + h)];
+    const g = reg(el("g", { class: "node", tabindex: 0, "data-key": "a:" + a.n,
+      "aria-label": a.pending ? `Account ${a.n} ${a.name}, ${a.unreachable ? "unreachable" : "awaiting token"}` : `Account ${a.n} ${a.name}, ${a.h.toFixed(1)} hours left` }, nodes), keys);
+    el("circle", { class: "focus-ring", cx: a.x, cy: a.y, r: 33 }, g);
+    el("circle", { cx: a.x, cy: a.y, r: 25, fill: v("--surface") }, g);
+    if (a.pending) {
+      el("circle", { cx: a.x, cy: a.y, r: 21, fill: "none", stroke: v("--muted"), "stroke-width": 1.5, "stroke-dasharray": "3 4" }, g);
+      el("text", { x: a.x, y: a.y + 4, class: "t-gauge", "text-anchor": "middle", style: "fill:var(--muted)" }, g, "—");
+    } else {
+      const tone = hw.length ? HW[hw.slice().sort((x, y) => HW[x].rank - HW[y].rank)[0]].color : "--open";
+      el("circle", { cx: a.x, cy: a.y, r: 21, fill: "none", stroke: v("--faint"), "stroke-width": 5 }, g);
+      if (a.h > 0) el("circle", { cx: a.x, cy: a.y, r: 21, fill: "none", stroke: v(a.h < 5 ? "--hot" : tone), "stroke-width": 5,
+        "stroke-linecap": "round", pathLength: 100, "stroke-dasharray": `${Math.max(2, Math.min(100, a.h / a.allowed * 100))} 100`,
+        transform: `rotate(-90 ${a.x} ${a.y})` }, g);
+      el("text", { x: a.x, y: a.y + 4, class: "t-gauge", "text-anchor": "middle", style: a.h <= 0 ? "fill:var(--hot)" : "" }, g,
+        a.h > 0 ? a.h.toFixed(1) : "0");
+      if (a.runs.length) {
+        const orbit = el("g", { class: "orbit", style: `transform-origin:${a.x}px ${a.y}px` }, g);
+        a.runs.forEach((r, k) => {
+          const t = (k / a.runs.length) * 2 * Math.PI;
+          el("circle", { cx: a.x + 31 * Math.cos(t), cy: a.y + 31 * Math.sin(t), r: 4, fill: v(HW[r[0]].color), stroke: v("--surface"), "stroke-width": 1.5 }, orbit);
+        });
+      }
+    }
+    // label
+    const cos = Math.cos(a.angle * Math.PI / 180), sin = Math.sin(a.angle * Math.PI / 180);
+    const [lx, ly] = pol(R1 + 42, a.angle);
+    let anchor = "middle", y1 = ly + 4;
+    if (cos > 0.3) anchor = "start"; else if (cos < -0.3) anchor = "end";
+    if (anchor === "middle") y1 = sin < 0 ? ly - 8 : ly + 14;
+    const state = a.pending ? (a.unreachable ? "unreachable" : "awaiting token") : a.runs.length ? `${a.h.toFixed(1)} h · busy ${a.runs.length}/${SLOTS}` : a.h <= 0 ? "no quota" : `${a.h.toFixed(1)} h · free`;
+    el("text", { x: lx, y: y1 - 4, class: "t-acct halo", "text-anchor": anchor, style: a.pending ? "fill:var(--muted)" : "" }, g, `${a.n} · ${a.name}`);
+    el("text", { x: lx, y: y1 + 11, class: "t-meta halo", "text-anchor": anchor }, g, state);
+  });
+
+  // ---------- competition nodes ----------
+  COMPS.forEach(c => {
+    const keys = ["c:" + c.id, "h:" + c.hw, ...live.filter(a => c.id in a.routes).map(a => "a:" + a.n)];
+    const g = reg(el("g", { class: "node", tabindex: 0, "data-key": "c:" + c.id, "aria-label": c.full }, nodes), keys);
+    el("rect", { class: "focus-ring", x: c.x - 15, y: c.y - 15, width: 30, height: 30, transform: `rotate(45 ${c.x} ${c.y})` }, g);
+    el("rect", { x: c.x - 9, y: c.y - 9, width: 18, height: 18, rx: 3, fill: v("--surface"), stroke: v(HW[c.hw].color), "stroke-width": 2.5, transform: `rotate(45 ${c.x} ${c.y})` }, g);
+    el("rect", { x: c.x - 3.5, y: c.y - 3.5, width: 7, height: 7, rx: 1.5, fill: v(HW[c.hw].color), transform: `rotate(45 ${c.x} ${c.y})` }, g);
+    // label above the diamond on the upper half of the dial, below it on the lower half
+    const ty = c.side === "above" ? c.y - 34 : c.y + 30;
+    el("text", { x: c.x, y: ty, class: "t-comp halo", "text-anchor": "middle" }, g, c.name);
+    el("text", { x: c.x, y: ty + 14, class: "t-meta halo", "text-anchor": "middle", style: c.days <= 7 ? "fill:var(--hot)" : "" }, g,
+      c.days >= 999 ? "no deadline" : `ends ${c.ends} · ${c.days} d`);
+  });
+
+  // ---------- hardware hub ----------
+  Object.entries(HWN).forEach(([k, h]) => {
+    const hw = HW[k], n = reach(k).length;
+    const keys = ["h:" + k, ...COMPS.filter(c => c.hw === k).map(c => "c:" + c.id), ...reach(k).map(a => "a:" + a.n)];
+    const g = reg(el("g", { class: "node", tabindex: 0, "data-key": "h:" + k, "aria-label": hw.name }, nodes), keys);
+    el("circle", { class: "focus-ring", cx: h.x, cy: h.y, r: h.r + 8 }, g);
+    el("circle", { cx: h.x, cy: h.y, r: h.r + 6, fill: v(hw.color), "fill-opacity": .12 }, g);
+    el("circle", { cx: h.x, cy: h.y, r: h.r, fill: v("--surface"), stroke: v(hw.color), "stroke-width": 2.5 }, g);
+    el("text", { x: h.x, y: h.y + 2, class: "t-hw", "text-anchor": "middle", style: `fill:${v(hw.color)}` }, g, hw.short);
+    el("text", { x: h.x, y: h.y + 16, class: "t-hwc", "text-anchor": "middle" }, g, `${n} acct${n === 1 ? "" : "s"}`);
+  });
+  // T4/P100 bus is selectable from the ring label
+  const busHit = reg(el("g", { class: "node", tabindex: 0, "data-key": "h:open", "aria-label": "T4 / P100" }, nodes), ["h:open", ...live.map(a => "a:" + a.n)]);
+  const [tx, ty] = pol(R1 - 30, BUS);
+  el("circle", { cx: tx, cy: ty, r: 26, fill: "transparent" }, busHit);
+
+  // the moon at the hub, carrying the cluster's spare hours
+  const defs = el("defs", {});
+  const mg = el("radialGradient", { id: "moonFill", cx: "38%", cy: "34%", r: "70%" }, defs);
+  el("stop", { offset: "0%", "stop-color": "#fbfcff" }, mg);
+  el("stop", { offset: "62%", "stop-color": "#dde1ee" }, mg);
+  el("stop", { offset: "100%", "stop-color": "#a9b0c8" }, mg);
+  const gg = el("radialGradient", { id: "moonGlow" }, defs);
+  el("stop", { offset: "0%", "stop-color": "#e7e9f2", "stop-opacity": .35 }, gg);
+  el("stop", { offset: "100%", "stop-color": "#e7e9f2", "stop-opacity": 0 }, gg);
+  const moon = el("g", { "pointer-events": "none" }, furniture);
+  el("circle", { cx: CX, cy: CY, r: 98, fill: "url(#moonGlow)" }, moon);
+  el("circle", { cx: CX, cy: CY, r: 54, fill: "url(#moonFill)" }, moon);
+  [[-22, -18, 9], [17, -26, 5], [24, 14, 11], [-14, 24, 6], [-34, 6, 4], [4, 34, 3.5]].forEach(([dx, dy, r]) =>
+    el("circle", { cx: CX + dx, cy: CY + dy, r, fill: "#9aa2bd", "fill-opacity": .28 }, moon));
+  el("text", { x: CX, y: CY + 7, class: "t-hub", "text-anchor": "middle" }, moon, spare.toFixed(1));
+  el("text", { x: CX, y: CY + 23, class: "t-hubs", "text-anchor": "middle" }, moon, "GPU-H SPARE");
+
+  // ---------- readout panel ----------
+  const panel = document.getElementById("readout");
+  const fmt = (h) => h.toFixed(1) + " h";
+  const row = (color, label, small, num) =>
+    `<div class="row"><span class="chip" style="background:${v(color)};color:${v(color)}"></span><span class="lbl">${label}${small ? `<small>${small}</small>` : ""}</span><span class="num">${num}</span></div>`;
+  const hint = `<div class="hint">Hover or tap a gauge, a diamond or a planet near the moon to trace it. Tap empty sky to return here.</div>`;
+
+  function renderPool() {
+    const runs = live.flatMap(a => a.runs);
+    const hwRows = [...Object.keys(HW_ANGLE).sort((x, y) => HW[x].rank - HW[y].rank), "open"].map(k => {
+      const rs = reach(k), s = rs.reduce((t, a) => t + a.h, 0);
+      const wall = HW[k].rate > 1 ? ` · ≈${(s / HW[k].rate).toFixed(1)} h of runtime` : "";
+      return row(HW[k].color, HW[k].name, `${rs.length} account${rs.length === 1 ? "" : "s"} · ${fmt(s)} quota${wall}`, "");
+    }).join("");
+    panel.innerHTML = `
+      <div><div class="kicker">Cluster</div><div class="big"><b>${spare.toFixed(1)}</b><span>GPU-hours spare</span></div></div>
+      <div class="rows">
+        ${row("--ink", `${live.length} account${live.length === 1 ? "" : "s"} live`, DATA.meta.live_note, "")}
+        ${row("--hot", `${runs.length} run${runs.length === 1 ? "" : "s"} active`, Object.keys(HW).filter(k => runs.some(r => r[0] === k)).map(k => `${runs.filter(r => r[0] === k).length} on ${HW[k].name}`).join(" · ") || "nothing running", "")}
+      </div>
+      <div><div class="kicker" style="margin-bottom:10px">Hardware reach</div><div class="rows">${hwRows}</div></div>
+      <p>Quota is one budget per account, so the hardware rows overlap: an hour spent on RTX is gone for 4xL4 too.</p>
+      ${hint}`;
+  }
+  function renderAccount(a) {
+    if (a.pending) {
+      panel.innerHTML = `<div><div class="kicker">Account ${a.n}</div><h2>${a.name}</h2><div class="sub">${a.unreachable ? "probe failed" : "no token yet"}</div></div>
+        <p>${a.unreachable ? "The probe could not sign in with this token. Replace it to bring the account back." : "This account arrived as an empty folder."} Put its access token in <code>account${a.n}_${a.name}/token</code> and it joins the cluster on the next probe.</p>${hint}`;
+      return;
+    }
+    const routes = Object.entries(a.routes).map(([cid, how]) => {
+      const c = comp(cid);
+      return row(HW[c.hw].color, `${HW[c.hw].name}`, `via ${c.full}${how === "rules" ? " · from rules, not yet seen in a run" : ""}`, `${c.days} d`);
+    }).join("") + row("--open", "T4 / P100", "no competition needed", "");
+    const runs = a.runs.length ? a.runs.map(r => row(HW[r[0]].color, `<code>${r[1]}</code>`, HW[r[0]].name, "running")).join("")
+      : `<p>No runs active.</p>`;
+    const state = a.runs.length ? ["--hot", `BUSY ${a.runs.length}/${SLOTS}`] : a.h <= 0 ? ["--muted", "NO QUOTA"] : ["--rtx", "FREE"];
+    panel.innerHTML = `
+      <div><div class="kicker">Account ${a.n}</div><h2>${a.name}</h2><div class="sub">${a.user}</div></div>
+      <div><div class="big"><b>${a.h.toFixed(1)}</b><span>of ${a.allowed.toFixed(0)} h left</span> <span class="tag" style="color:${v(state[0])}">${state[1]}</span></div>
+        <div class="bar" style="margin-top:10px"><i style="width:${Math.min(100, a.h / a.allowed * 100)}%;background:${v(a.h < 5 ? "--hot" : "--ink")}"></i></div></div>
+      <div><div class="kicker" style="margin-bottom:10px">Reaches</div><div class="rows">${routes}</div></div>
+      <div><div class="kicker" style="margin-bottom:10px">Active runs</div><div class="rows">${runs}</div></div>
+      ${hint}`;
+  }
+  function renderComp(c) {
+    const members = live.filter(a => c.id in a.routes);
+    panel.innerHTML = `
+      <div><div class="kicker">Competition</div><h2>${c.full}</h2><div class="sub">${c.slug}</div></div>
+      <div class="big"><b style="color:${c.days <= 7 ? v("--hot") : "inherit"}">${c.days}</b><span>days left · ends ${c.ends}, 23:59 UTC</span></div>
+      <div class="rows">${row(HW[c.hw].color, `Grants ${HW[c.hw].name}`, HW[c.hw].spec, "")}</div>
+      <div><div class="kicker" style="margin-bottom:10px">Entered by</div><div class="rows">${members.map(a =>
+        row(a.routes[c.id] === "rules" ? "--faint" : HW[c.hw].color, `${a.n} · ${a.name}`, a.routes[c.id] === "rules" ? "not yet seen in a run" : "seen in a run", fmt(a.h))).join("")}</div></div>
+      ${hint}`;
+  }
+  function renderHw(k) {
+    const hw = HW[k], rs = reach(k), s = rs.reduce((t, a) => t + a.h, 0);
+    const via = COMPS.filter(c => c.hw === k);
+    panel.innerHTML = `
+      <div><div class="kicker">Hardware</div><h2 style="color:${v(hw.color)}">${hw.name}</h2><div class="sub">${hw.spec}</div></div>
+      <div class="big"><b>${rs.length}</b><span>account${rs.length === 1 ? "" : "s"} can reach it · ${fmt(s)} quota${HW[k].rate > 1 ? ` ≈ ${(s / HW[k].rate).toFixed(1)} h runtime` : ""}</span></div>
+      <p>${hw.note}</p>
+      ${via.length ? `<div><div class="kicker" style="margin-bottom:10px">Granted by</div><div class="rows">${via.map(c => row(hw.color, c.full, c.slug, `${c.days} d`)).join("")}</div></div>` : ""}
+      <div><div class="kicker" style="margin-bottom:10px">Accounts</div><div class="rows">${rs.slice().sort((x, y) => y.h - x.h).map(a =>
+        row(a.h < 5 ? "--hot" : hw.color, `${a.n} · ${a.name}`, a.runs.length ? `busy ${a.runs.length}/${SLOTS}` : a.h <= 0 ? "no quota" : "free", fmt(a.h))).join("")}</div></div>
+      ${hint}`;
+  }
+  const show = (key) => {
+    if (!key) return renderPool();
+    const [t, id] = key.split(":");
+    if (t === "a") renderAccount(ACCTS.find(a => String(a.n) === id));
+    if (t === "c") renderComp(comp(id));
+    if (t === "h") renderHw(id);
+  };
+
+  // ---------- interaction ----------
+  let pinned = null;
+  const light = (key) => {
+    svg.classList.toggle("dim", !!key);
+    registry.forEach(r => r.el.classList.toggle("on", !!key && r.keys.has(key)));
+    show(key);
+  };
+  svg.querySelectorAll(".node").forEach(n => {
+    const key = n.getAttribute("data-key");
+    n.addEventListener("mouseenter", () => { if (!pinned) light(key); });
+    n.addEventListener("mouseleave", () => { if (!pinned) light(null); });
+    n.addEventListener("focus", () => { if (!pinned) light(key); });
+    n.addEventListener("blur", () => { if (!pinned) light(null); });
+    n.addEventListener("click", (e) => { e.stopPropagation(); pinned = pinned === key ? null : key; light(pinned); });
+    n.addEventListener("keydown", (e) => { if (e.key === "Escape") { pinned = null; n.blur(); light(null); } });
+  });
+  svg.addEventListener("click", () => { pinned = null; light(null); });
+  renderPool();
+})();
+
+// star field: seeded so the sky looks the same on every visit
+(function () {
+  const cvs = document.getElementById("stars");
+  const ctx = cvs.getContext("2d");
+  let seed = 1969;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const STARS = Array.from({ length: 420 }, () => ({
+    x: rnd(), y: rnd(), r: rnd() < .92 ? .4 + rnd() * .8 : 1.2 + rnd() * .9,
+    a: .25 + rnd() * .6, tw: rnd() * Math.PI * 2, sp: .4 + rnd() * 1.2, warm: rnd() < .12,
+  }));
+  const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let w = 0, h = 0;
+  const size = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = cvs.clientWidth; h = cvs.clientHeight;
+    cvs.width = w * dpr; cvs.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  const draw = (t) => {
+    ctx.clearRect(0, 0, w, h);
+    // a faint milky band across the sky
+    const band = ctx.createLinearGradient(0, h * .9, w, h * .1);
+    band.addColorStop(0, "rgba(120,140,220,0)");
+    band.addColorStop(.5, "rgba(120,140,220,.06)");
+    band.addColorStop(1, "rgba(120,140,220,0)");
+    ctx.fillStyle = band; ctx.fillRect(0, 0, w, h);
+    for (const s of STARS) {
+      const a = still ? s.a : s.a * (.65 + .35 * Math.sin(s.tw + t / 1000 * s.sp));
+      ctx.beginPath();
+      ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = s.warm ? `rgba(255,226,180,${a})` : `rgba(226,232,255,${a})`;
+      ctx.fill();
+      if (s.r > 1.6) {
+        ctx.fillStyle = `rgba(226,232,255,${a * .15})`;
+        ctx.beginPath(); ctx.arc(s.x * w, s.y * h, s.r * 3.2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    if (!still && !document.hidden) requestAnimationFrame(draw);
+  };
+  size(); draw(0);
+  window.addEventListener("resize", () => { size(); if (still) draw(0); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !still) requestAnimationFrame(draw); });
+})();
+</script>

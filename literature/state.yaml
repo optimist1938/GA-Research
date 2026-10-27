@@ -1,0 +1,58 @@
+last_run: '2026-10-27'
+runs:
+- date: '2026-10-25'
+  window:
+  - '2026-10-12'
+  - '2026-10-25'
+  sources:
+  - arxiv
+  - openreview
+  - crossref
+  - inspire
+  candidates: 705
+  known: 14
+  known_updated: 14
+  inbox_new: 13
+  below_threshold: 678
+- date: '2026-10-25'
+  window:
+  - '2026-10-12'
+  - '2026-10-25'
+  sources:
+  - arxiv
+  - openreview
+  - crossref
+  - inspire
+  candidates: 706
+  known: 13
+  known_updated: 0
+  inbox_new: 2
+  below_threshold: 691
+- date: '2026-10-26'
+  window:
+  - '2026-10-24'
+  - '2026-10-26'
+  sources:
+  - arxiv
+  - openreview
+  - crossref
+  - inspire
+  candidates: 521
+  known: 0
+  known_updated: 0
+  inbox_new: 0
+  below_threshold: 521
+- date: '2026-10-27'
+  window:
+  - '2026-10-25'
+  - '2026-10-27'
+  sources:
+  - arxiv
+  - openreview
+  - crossref
+  - inspire
+  candidates: 531
+  known: 0
+  known_updated: 0
+  inbox_new: 0
+  below_threshold: 531

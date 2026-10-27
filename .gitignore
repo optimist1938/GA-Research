@@ -197,3 +197,6 @@ kaggle*.json
 */token
 *_tokens/
 *_tokens_*/
+
+# literature sweep: cached fetch results
+literature/.cache/

@@ -95,6 +95,39 @@ _NO_SHAPE = frozenset({"", "none", "null"})
 #: 6000, TPU) is reachable only from a kernel attached to a competition the account has entered.
 OPEN_ACCELERATORS = frozenset({"cpu", "t4", "p100"})
 
+#: Human-readable hardware behind each short label, for reports. ``NvidiaL4`` is the shape
+#: of the 4xL4 machine (96 GB of GPU memory in total) that Gemma 4 and ARC-AGI-2 provide.
+ACCELERATOR_NAMES = {
+    "cpu": "CPU",
+    "t4": "T4",
+    "p100": "P100",
+    "l4": "4xL4",
+    "rtx6000": "RTX Pro 6000",
+    "tpu-v3": "TPU v3-8",
+    "tpu-v5e": "TPU v5e-8",
+}
+
+#: Quota-hours charged per wall-clock hour, where it is not 1. Kaggle's competition pages state
+#: that the 4xL4 machine uses the weekly GPU quota at twice the T4/P100 rate.
+QUOTA_RATE = {"l4": 2.0}
+
+#: Which competitions grant each competition-gated accelerator. Kaggle attaches premium
+#: hardware to a specific competition, not to an account: entering ARC-AGI-3 unlocks RTX Pro
+#: 6000, entering Gemma 4 unlocks 4xL4, and a practice competition such as spaceship-titanic
+#: unlocks nothing. Add a row when a new competition brings hardware. A kernel seen running on
+#: a gated accelerator while citing a competition also counts (see ``AccountStatus.routes``),
+#: so a missing row is learned from the first run on it.
+COMPETITION_ACCELERATORS: Dict[str, frozenset] = {
+    "rtx6000": frozenset({
+        "arc-prize-2026-arc-agi-3",
+        "nvidia-nemotron-model-reasoning-challenge",
+    }),
+    "l4": frozenset({
+        "gemma-4-developer-agent",
+        "arc-prize-2026-arc-agi-2",
+    }),
+}
+
 
 def normalize_accelerator(value: str) -> str:
     """Accept a short label (``"l4"``) or a Kaggle shape (``"NvidiaL4"``) -> short label."""
@@ -112,6 +145,33 @@ def shape_label(shape: Optional[str]) -> str:
     if not shape or str(shape).strip().lower() in _NO_SHAPE:
         return "cpu"
     return SHAPE_LABELS.get(shape, shape)
+
+
+#: Every known accelerator label that needs a competition, in ``SHAPE_LABELS`` order.
+GATED_ACCELERATORS = tuple(l for l in SHAPE_LABELS.values() if requires_competition(l))
+
+
+def quota_rate(accelerator: str) -> float:
+    """Quota-hours one wall-clock hour on ``accelerator`` costs (``"l4"`` -> 2.0)."""
+    return QUOTA_RATE.get(normalize_accelerator(accelerator), 1.0)
+
+
+def accelerator_name(accelerator: str) -> str:
+    """``"l4"`` -> ``"4xL4"``; unknown labels pass through."""
+    label = normalize_accelerator(accelerator)
+    return ACCELERATOR_NAMES.get(label, label)
+
+
+def _parse_deadline(value: Any) -> Optional[datetime]:
+    """``"2026-12-02T23:59:00"`` (UTC, optionally with fractional seconds) -> aware datetime."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "").split("+")[0]).replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
 
 
 def default_cli() -> str:
@@ -275,6 +335,8 @@ class KernelRun:
     last_run: Optional[str] = None
     #: ``machine_shape`` the kernel requests, when accelerator info was collected.
     machine_shape: Optional[str] = None
+    #: ``competition_sources`` the kernel cites, collected together with ``machine_shape``.
+    competitions: List[str] = field(default_factory=list)
 
     @property
     def accelerator(self) -> Optional[str]:
@@ -297,6 +359,7 @@ class KernelRun:
             "active": self.is_active,
             "accelerator": self.accelerator,
             "machine_shape": self.machine_shape,
+            "competitions": list(self.competitions),
             "url": self.url,
         }
 
@@ -315,6 +378,9 @@ class AccountStatus:
     #: Competitions the account has entered (``kaggle competitions list --group entered``).
     competitions: List[str] = field(default_factory=list)
     competitions_checked: bool = False
+    #: Competition slug -> its final deadline (UTC), as listed by the CLI. Past it, the
+    #: competition's hardware is gone.
+    competition_deadlines: Dict[str, Optional[datetime]] = field(default_factory=dict)
     max_concurrent: int = 2
 
     @property
@@ -366,24 +432,67 @@ class AccountStatus:
         """True if an inspected kernel of this account requested ``accelerator``."""
         return normalize_accelerator(accelerator) in self.accelerators_seen
 
-    def can_use(self, accelerator: str) -> bool:
+    def live_competitions(self, now: Optional[datetime] = None) -> List[str]:
+        """Entered competitions whose deadline has not passed (unknown deadline counts as live)."""
+        now = now or datetime.now(timezone.utc)
+        out = []
+        for slug in self.competitions:
+            deadline = self.competition_deadlines.get(slug)
+            if deadline is None or deadline > now:
+                out.append(slug)
+        return out
+
+    def routes(self, now: Optional[datetime] = None) -> Dict[str, List[str]]:
+        """Gated accelerator -> the live entered competitions that grant it.
+
+        A competition grants an accelerator if ``COMPETITION_ACCELERATORS`` says so, or if one
+        of this account's kernels ran on that accelerator while citing it. Empty when
+        competitions were not collected.
+        """
+        if not self.competitions_checked:
+            return {}
+        live = self.live_competitions(now)
+        out: Dict[str, List[str]] = {}
+        for accel in GATED_ACCELERATORS:
+            granted = set(COMPETITION_ACCELERATORS.get(accel, ()))
+            for kernel in self.kernels:
+                if kernel.accelerator == accel:
+                    granted.update(kernel.competitions)
+            hits = [c for c in live if c in granted]
+            if hits:
+                out[accel] = hits
+        return out
+
+    def competition_for(self, accelerator: str) -> Optional[str]:
+        """The competition a kernel on ``accelerator`` should cite from this account."""
+        hits = self.routes().get(normalize_accelerator(accelerator))
+        return hits[0] if hits else None
+
+    def can_use(self, accelerator: str, competitions: Sequence[str] = ()) -> bool:
         """Whether this account can reach ``accelerator`` at all.
 
         T4, P100 and CPU are always available. L4 / RTX Pro 6000 / TPU only exist inside a
-        competition, so they need at least one entered competition -- and the kernel must cite
-        it in ``competition_sources``. Unknown when competitions were not collected, in which
-        case observed history is the fallback answer.
+        competition that grants that particular accelerator (see ``routes``), and the kernel
+        must cite it in ``competition_sources``. ``competitions`` narrows this to kernels that
+        cite one of those slugs. Unknown when competitions were not collected, in which case
+        observed history is the fallback answer.
         """
-        if not requires_competition(accelerator):
+        accel = normalize_accelerator(accelerator)
+        if not requires_competition(accel):
             return True
-        if self.competitions_checked:
-            return bool(self.competitions)
-        return self.has_run_on(accelerator)
+        if not self.competitions_checked:
+            return self.has_run_on(accel)
+        hits = self.routes().get(accel, [])
+        if competitions:
+            return any(c in hits for c in competitions)
+        return bool(hits)
 
     @property
-    def premium_accelerators(self) -> bool:
-        """True if competition-gated accelerators (L4, RTX Pro 6000, TPU) are reachable."""
-        return self.can_use("l4")
+    def premium_accelerators(self) -> List[str]:
+        """Competition-gated accelerators this account can reach right now."""
+        if self.competitions_checked:
+            return list(self.routes())
+        return [a for a in GATED_ACCELERATORS if self.has_run_on(a)]
 
     def quota(self, resource: str) -> Quota:
         resource = resource.lower()
@@ -411,6 +520,7 @@ class AccountStatus:
             "competitions": list(self.competitions),
             "competitions_checked": self.competitions_checked,
             "premium_accelerators": self.premium_accelerators,
+            "routes": self.routes(),
         }
 
 
@@ -612,14 +722,20 @@ class PoolRouter:
         """The accelerator ``ref`` requests (``"NvidiaL4"``), or ``None`` for CPU/unknown."""
         return self.kernel_metadata(account, ref).get("machine_shape") or None
 
-    def entered_competitions(self, account: PoolAccount) -> List[str]:
-        """Competition slugs the account has entered; the gate for non-T4/P100 accelerators."""
+    def entered_competition_deadlines(self, account: PoolAccount) -> Dict[str, Optional[datetime]]:
+        """Entered competition slug -> its deadline (UTC), in the CLI's order."""
         rows = self.cli_json(account, "competitions", "list", "--group", "entered") or []
-        out = []
+        out: Dict[str, Optional[datetime]] = {}
         for row in rows:
             ref = row.get("ref") or row.get("title") or ""
-            out.append(str(ref).rstrip("/").rsplit("/", 1)[-1])
-        return [c for c in out if c]
+            slug = str(ref).rstrip("/").rsplit("/", 1)[-1]
+            if slug:
+                out[slug] = _parse_deadline(row.get("deadline"))
+        return out
+
+    def entered_competitions(self, account: PoolAccount) -> List[str]:
+        """Competition slugs the account has entered; the gate for non-T4/P100 accelerators."""
+        return list(self.entered_competition_deadlines(account))
 
     def my_kernels(self, account: PoolAccount, page_size: int = 20) -> List[Dict[str, Any]]:
         return self.cli_json(
@@ -663,7 +779,8 @@ class PoolRouter:
 
         if with_competitions:
             try:
-                status.competitions = self.entered_competitions(account)
+                status.competition_deadlines = self.entered_competition_deadlines(account)
+                status.competitions = list(status.competition_deadlines)
                 status.competitions_checked = True
             except Exception as exc:
                 status.error = "quota ok, competitions failed (%s)" % exc
@@ -696,7 +813,12 @@ class PoolRouter:
             run = KernelRun(ref=ref, status=state, last_run=last_run)
             # An active kernel's hardware is the interesting part, so fetch that regardless.
             if with_accelerators or run.is_active:
-                run.machine_shape = self.machine_shape(account, ref) or ""
+                meta = self.kernel_metadata(account, ref)
+                run.machine_shape = meta.get("machine_shape") or ""
+                run.competitions = [
+                    str(c).rstrip("/").rsplit("/", 1)[-1]
+                    for c in meta.get("competition_sources") or []
+                ]
             status.kernels.append(run)
         status.kernels_checked = True
         return status
@@ -734,12 +856,14 @@ class PoolRouter:
         require_idle: bool = False,
         require_free_slot: bool = False,
         accelerator: Optional[str] = None,
+        competitions: Sequence[str] = (),
     ) -> List[AccountStatus]:
         """Accounts with spare capacity, richest in remaining quota first.
 
         ``accelerator`` keeps only accounts that can reach that GPU type: T4/P100 anywhere,
-        L4 / RTX Pro 6000 / TPU only where a competition has been entered. Quota is pooled
-        across types, so this is about eligibility, never budget.
+        L4 / RTX Pro 6000 / TPU only where a competition granting it has been entered (and,
+        if ``competitions`` is given, one of those). Quota is pooled across types, so this is
+        about eligibility, never budget.
         """
         out = []
         for status in self.statuses:
@@ -751,7 +875,7 @@ class PoolRouter:
                 continue
             if require_free_slot and status.kernels_checked and status.free_slots <= 0:
                 continue
-            if accelerator and not status.can_use(accelerator):
+            if accelerator and not status.can_use(accelerator, competitions):
                 continue
             out.append(status)
         return sorted(out, key=lambda s: s.quota(resource).remaining_h, reverse=True)
@@ -835,22 +959,27 @@ class PoolRouter:
                 "POOL", ", ".join("%s x%d" % (a, n) for a, n in
                                   sorted(pool_counts.items(), key=lambda kv: (-kv[1], kv[0])))))
 
-        if any(st.competitions_checked for st in statuses):
+        checked = [st for st in statuses if st.ok and st.competitions_checked]
+        if checked:
             lines.append("")
-            lines.append("competitions entered (the gate for L4 / RTX Pro 6000 / TPU):")
-            for status in statuses:
-                if not status.competitions_checked:
-                    continue
-                comps = status.competitions
-                lines.append("  %-28s %-4s %s" % (
+            lines.append("competition-only GPUs (each granted by a specific live competition):")
+            per_accel: Dict[str, List[str]] = {}
+            for status in checked:
+                routes = status.routes()
+                for accel in routes:
+                    per_accel.setdefault(accel, []).append(status.name)
+                lines.append("  %-28s %s" % (
                     status.name,
-                    "YES" if comps else "no",
-                    (", ".join(comps[:3]) + (" +%d more" % (len(comps) - 3) if len(comps) > 3 else ""))
-                    if comps else "T4 / P100 only",
+                    "; ".join("%s via %s" % (accelerator_name(a), ", ".join(c))
+                              for a, c in routes.items())
+                    or "none (T4 / P100 only)",
                 ))
-            eligible = [st.name for st in statuses if st.competitions_checked and st.competitions]
-            lines.append("  %-28s %d of %d accounts can reach the competition-only GPUs"
-                         % ("POOL", len(eligible), sum(1 for st in statuses if st.competitions_checked)))
+            lines.append("  %-28s %s" % (
+                "POOL",
+                ", ".join("%s on %d account(s)" % (accelerator_name(a), len(per_accel[a]))
+                          for a in GATED_ACCELERATORS if a in per_accel)
+                or "no competition-only GPU reachable",
+            ))
 
         active = self.running_by_account()
         if active:
@@ -906,12 +1035,13 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--accelerator",
-        help="only count accounts that can reach this GPU type (t4, p100, l4, rtx6000, tpu-v5e)",
+        help="only count accounts that can reach this GPU type (%s)"
+        % ", ".join(sorted(set(SHAPE_LABELS.values()))),
     )
     parser.add_argument(
         "--competitions",
         action="store_true",
-        help="also report entered competitions, which gate every GPU beyond T4/P100",
+        help="also report which competition-only GPUs each account's entered competitions grant",
     )
     parser.add_argument("--idle-only", action="store_true")
     parser.add_argument("--running", action="store_true", help="print only active kernels")
