@@ -125,6 +125,22 @@ poetry run python -m pose3d --path_to_datasets ... --no-backbone_bf16   # exact 
 poetry run python -m pose3d --path_to_datasets ... --no-gatr_dense_linear --no-gatr_compile --no-backbone_bf16  # as before
 ```
 
+## Flow-trajectory visualizations
+
+`pose3d/visualize_flow.py` replays the flow's Euler loop from several random rotations and draws every step: each rotation relative
+to the ground truth as an axis-angle vector in the ball of radius pi (true pose at the origin, distance = error), the angle to the true
+pose against flow time, a rotating-frame film strip, and an animation. Several checkpoints can be compared on the same images and noise.
+
+```bash
+poetry run python -m pose3d.visualize_flow --checkpoint a.pth --label GATr --checkpoint b.pth --label MLP \
+    --val_cache pascal_val.pt --out viz/
+```
+
+During training, `--log_viz` (on in the runner notebook) sends the same to W&B for `--viz_images` fixed validation images: every
+`--viz_every` epochs a predictions table (image, class, true and predicted rotation, medoid error, share of the noise samples that end
+within 15 deg) and the paths figure, and after the last epoch a film strip and an animation. Flow models only, and it needs `--run_name`.
+A run launched with `WANDB_MODE=offline` stores the media in its run folder; `wandb sync` uploads it.
+
 ## Micro and macro metrics
 
 Every reported number has two versions. Micro is pooled over all validation images, so the big
@@ -138,6 +154,44 @@ The pre-built RAM cache holds no class labels, so they are read from the annotat
 mounted Pascal3D+ (no image is decoded) and checked against the cache's ground-truth rotations. If
 Pascal3D+ is not mounted, or the check fails, macro metrics are skipped with a message and the
 run goes on. Other loaders pass the labels through as before.
+
+## SYMSOL and the Image2Sphere baseline
+
+`--dataset symsol` reads `symsol/{train,test}/rotations.npz + images/` under `--path_to_datasets`
+(datasets/symsol.py). Every test image carries all of its equivalent poses, so the rotation error is to the
+**nearest equivalent** (a cube has 24 right answers), and the final evaluation also reports the SYMSOL
+log-likelihood. `--symsol_train_views 4500` is the 10 % protocol of the `symsol1_10pct_*` runs (4,500 of
+45,000 views per shape); `--symsol_test_views` caps the test views per shape (default: all 5,000).
+
+The published Image2Sphere model is `--model i2s_real` (models/i2s_real.py, upstream's code under this
+harness). On SYMSOL it reports the same median rotation error as the flows plus upstream's grid
+log-likelihood (engine/grid_model_likelihood.py: `log(softmax(grid)[nearest cell] * N / pi^2)`, no cap). Its
+evaluation grid is built lazily on the GPU, so the paper's level-5 grid (2.36M rotations, a 4.3 GB Wigner
+matrix) is usable: `--i2s_eval_rec_level 5`. The paper's recipe on SYMSOL I with 10 % of the data:
+
+```bash
+poetry run python -m pose3d --path_to_datasets ... --run_name i2s_symsol1_10pct_sgd \
+  --model i2s_real --encoder resnet50 --dataset symsol --symsol_set 1 --symsol_train_views 4500 \
+  --no-use_warp --no-use_synth --no-ema --no-fixed_val_noise --batch_size 64 --n_epochs 40 \
+  --optimizer sgd --lr 1e-3 --lr_scaling none --lr_schedule step --lr_step_epochs 15 --warmup_epochs 0 --grad_clip 0 \
+  --i2s_eval_rec_level 5
+```
+
+`notebooks/i2s-symsol-runner.ipynb` runs it on Kaggle (one process, `--no-ddp`: two DDP ranks each holding the 7 GB of decoded images exceed a T4 x2 kernel's RAM) (and the same model under the AdamW / cosine schedule
+of the `symsol1_10pct_*_i2s_adamw` flow runs), online from a clone of the branch or offline from a repo
+snapshot; attach `syfry5suvzovvakmuj/symsol1-10pct-fulltest`. For reference, Image2Sphere's Table 3 gives
+log-likelihoods only: 2.98 on SYMSOL I with 10k views per shape, 3.41 with the full public set (50k); it
+reports no rotation error on SYMSOL.
+
+## Two-tower model: the STF tensor track
+
+`--stf_track` (off by default) adds a second feature track of symmetric traceless Cartesian tensors of ranks
+2..`--stf_lmax` (default 3, up to 6), `--stf_channels` (8) per rank, to `clifford_flow` with the GATr vector
+field. They carry the SO(3) degrees l >= 2 that multivectors cannot, are built from the grade-1 parts of the
+condition multivectors and reach the vector field as rotor-dependent invariant scalars (`--stf_inject gram|frame`).
+Design, tests, the SYMSOL protocol, run commands and the time estimates: `reports/symsol_stf/README.md`; runner:
+`notebooks/symsol-stf-runner.ipynb` (offline mode for the RTX kernels; the repo snapshot comes from
+`scripts/make_snapshot.py`).
 
 ## Multi-GPU
 

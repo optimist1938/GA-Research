@@ -9,11 +9,13 @@ from pose3d.models.clifford_flow import ImageToMultivectors
 
 class MLPFlow(nn.Module):
     def __init__(self, algebra, cond_hidden: int = 210, cond_features: int = 512, field_hidden: int = 128,
-                 pretrained_backbone: bool = False, adapter_grid: int = 16, encoder_type: str = "resnet"):
+                 pretrained_backbone: bool = False, adapter_grid: int = 16, encoder_type: str = "resnet",
+                 conv_adapter: bool = True):
         super().__init__()
+        # conv_adapter=False: the pooled backbone vector cut into multivectors, the input DiTFlow sees.
         self.adapter = ImageToMultivectors(algebra, grid=adapter_grid,
                                            pretrained_backbone=pretrained_backbone,
-                                           encoder_type=encoder_type)
+                                           encoder_type=encoder_type, conv_adapter=conv_adapter)
         adapter_dim = self.adapter.n_mv * (2**algebra.dim)
 
         self.condition_mlp = nn.Sequential(

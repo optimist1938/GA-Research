@@ -50,6 +50,7 @@ from typing import Any, List, Literal, Optional, Tuple, Union, get_args, get_ori
 ModelName = Literal[
     "clifford_flow",   # the main line: conditional flow matching on Spin(3) rotors
     "mlp_flow",        # non-equivariant flow-matching baseline
+    "dit_flow",        # non-equivariant flow matching with a DiT (transformer) denoiser
     "i2s_real",        # published Image2Sphere, adapted to this harness
     "i2s",             # in-repo I2S with a GA head (average-pooled features)
     "ga_i2s",          # in-repo I2S with the GA pixel encoder
@@ -79,7 +80,11 @@ class RunConfig:
     """Where the data is, how the run is named and logged."""
 
     path_to_datasets: str = field(default="", metadata={"required": True})
-    dataset: Literal["pascal", "dummynet", "modelnet10", "symsol"] = "pascal"
+    # modelnet10_points: ModelNet10-SO(3)'s objects and split with a point cloud as input instead of an image
+    # (datasets/modelnet_points.py); needs cond_tokens=points / pointsphere, or --model dit_flow.
+    # symsol_points: SYMSOL I's five shapes as point clouds, generated (datasets/symsol_points.py); uses
+    # symsol_train_views / symsol_test_views per shape and points_n.
+    dataset: Literal["pascal", "dummynet", "modelnet10", "symsol", "modelnet10_points", "symsol_points"] = "pascal"
     platform: Literal["kaggle", "colab"] = "kaggle"
     run_name: Optional[str] = None
     path_to_checkpoint: Optional[str] = None   # evaluate this checkpoint before training
@@ -88,6 +93,12 @@ class RunConfig:
     wandb_project: str = "3D Pose Estimation"
     wandb_entity: str = "clifforders"
     wandb_group: Optional[str] = None
+    # Log flow-trajectory visualizations to W&B (needs --run_name and a flow model): every viz_every epochs a predictions table
+    # (image, true / predicted rotation, error, share of noise samples within 15 deg) and the paths-in-SO(3) figure for viz_images fixed
+    # validation images, and after the last epoch also a film strip and an animation. See engine/flow_viz.py.
+    log_viz: bool = False
+    viz_every: int = 10          # 0: only after the last epoch
+    viz_images: int = 6
     # Base seed for the run. None: torch's default. Under --ddp every rank adds its rank,
     # so the flow's (t, r0) noise differs between GPUs.
     seed: Optional[int] = None
@@ -113,6 +124,21 @@ class TrainConfig:
     eval_samples: int = 32
     # Per-optimizer-step decay of Features.ema (0.999: ~1000-step horizon).
     ema_decay: float = 0.999
+    # adamw (default, weight decay 0.01) or sgd (momentum, Nesterov, no weight decay): the
+    # Image2Sphere / Howell et al. recipe is --optimizer sgd --lr 1e-3 --lr_scaling none
+    # --lr_schedule step --warmup_epochs 0 --n_epochs 40 --no-ema (SGD + Nesterov 0.9, lr x0.1 every
+    # 15 epochs, batch 64, 40 epochs).
+    optimizer: Literal["adamw", "sgd"] = "adamw"
+    momentum: float = 0.9
+    nesterov: bool = True
+    # cosine: warmup, then cosine decay to 5% of the base lr. step: warmup (if any), then x lr_step_gamma
+    # every lr_step_epochs epochs.
+    lr_schedule: Literal["cosine", "step"] = "cosine"
+    lr_step_epochs: int = 15
+    lr_step_gamma: float = 0.1
+    # Global gradient-norm clip; 0 turns it off. 1.0 is part of the flow recipes; Image2Sphere trains unclipped,
+    # and with SGD at lr 1e-3 the clip starves its updates (loss stuck near uniform after 40 epochs).
+    grad_clip: float = 1.0
 
 
 @dataclass
@@ -199,10 +225,33 @@ class DataConfig:
     # Draw synthetic images with the pack's importance weights (restores the PASCAL3D+ viewpoint
     # distribution after the ShapeNet-v2 azimuth relabel). Off: uniform draws, as Image2Sphere.
     synth_pack_weights: bool = False
-    # --dataset symsol: which shape subset (image2sphere.dataset.SymsolDataset class_names).
+    # --dataset symsol: which shape subset (datasets/symsol.py SHAPE_SETS).
     # 1: the standard 5-shape benchmark (tet, cube, icosa, cone, cyl). 2/3/4: the single-shape
     # near-symmetric variants (sphereX/cylO/tetX).
     symsol_set: int = 1
+    # First views per shape kept from the train / test split (None: all 45,000 / 5,000). Howell et al.'s
+    # "10 % of the training data" is --symsol_train_views 4500.
+    symsol_train_views: Optional[int] = None
+    symsol_test_views: Optional[int] = None
+    # Final grid log-likelihood of the wignerd head (engine/symsol_ll.py): test views per shape.
+    symsol_ll_views: int = 5000
+    # Final SYMSOL log-likelihood (engine/likelihood.py): equivalents scored per test image, ODE steps.
+    points_n: int = 256              # modelnet10_points: points per cloud (a fresh subset at every training read)
+    points_test_rotations: int = 4   # modelnet10_points: fixed test poses per model (ModelNet10-SO(3): 4 views)
+    points_repeats: int = 1          # modelnet10_points / symsol_points: draws (poses) per model per epoch
+    points_fixed_train: bool = False  # symsol_points: a fixed training set (symsol_train_views clouds per shape)
+    # Score the SYMSOL log-likelihood at the end of a flow run. Off: the final evaluation reports only the
+    # rotation errors (acc@15 as the primary metric, the median error as the auxiliary one); the ODE
+    # likelihood of a flow is not the quantity the IPDF / Image2Sphere papers report, so it is not compared.
+    symsol_likelihood: bool = True
+    symsol_ll_equivalents: int = 8
+    symsol_ll_steps: int = 50
+    # Flow each training R0 to the nearest of the image's equivalent poses instead of a random one. With a random
+    # equivalent the targets of a cube (24 copies) or icosahedron (60) cancel until late in the flow, so "v = 0"
+    # is nearly optimal for them; both flows learned the cone and cylinder and switched the polyhedra off (P1 all
+    # three, DiT the icosahedron), see reports. With a uniform R0 every equivalent is still chosen equally often,
+    # so the flow learns the same symmetric distribution and the likelihood is unchanged in meaning.
+    symsol_nearest_coupling: bool = False
 
 
 @dataclass
@@ -253,11 +302,80 @@ class FlowConfig:
     # the condition head stays a Clifford MLP. Needs the GATr package (see models/gatr_denoiser.py).
     # "clifford": the CGENN-style Clifford MLP (the 9.63 deg recipe); the gatr_* options are
     # unused then.
-    vector_field: Literal["clifford", "gatr"] = "gatr"
+    # "so3fourier": the image becomes C_f signals on SO(3) (Wigner coefficients up to so3f_lmax, image2sphere-style
+    # lift + S2 -> SO(3) conv) and the velocity is read from them expressed around the pose hypothesis, exactly
+    # equivariant to 90 deg turns and flips of the map (models/so3fourier_head.py). Needs cond_tokens=sphere,
+    # condition_head=none, pose_tokens=rotor. Small (~0.25M after the backbone): s2 32 / so3 8 / hidden 44;
+    # large (~1.1M): 64 / 16 / 124.
+    # "rotorcorr" (GA-1): the same lift onto the hemisphere, no Fourier transforms; J template vectors p_j are
+    # turned by the pose rotor (R p_j R~) and compared with the image's signal at the points, exp(<x_i, R p_j> - |p_j|),
+    # `rc_hidden` correlations -> MLP (models/rotor_corr_head.py). Uses so3f_s2_channels / so3f_nside /
+    # so3f_flip_symmetrize; needs cond_tokens=sphere, condition_head=none, pose_tokens=rotor.
+    # Small (~0.25M after the backbone): s2 32 / templates 48 / hidden 103 (248,450).
+    vector_field: Literal["clifford", "gatr", "so3fourier", "rotorcorr"] = "gatr"
+    rc_templates: int = 48
+    rc_hidden: int = 103
+    rc_kappa: float = 10.0
+    so3f_lmax: int = 6
+    so3f_s2_channels: int = 32
+    so3f_so3_channels: int = 8
+    so3f_hidden: int = 44
+    so3f_nside: int = 4
+    so3f_flip_symmetrize: bool = True
+    # False: the non-equivariant twin (same condition path, the read-out sees [c, R] instead of D(R)^T c).
+    so3f_canonicalize: bool = True
     # Same choice for the condition head (backbone multivectors -> n_cond_mv condition
     # multivectors): "gatr" runs GATr over the backbone tokens plus n_cond_mv learned queries.
     # Shares the gatr_* sizes with the vector field. Not with mlp_heads or fisher_prior.
-    condition_head: Literal["clifford", "gatr"] = "clifford"
+    # "none" (needs cond_tokens=so2): no condition head; the so2 head emits the n_cond_mv condition
+    # multivectors itself and they go straight into the vector field.
+    condition_head: Literal["clifford", "gatr", "none"] = "clifford"
+    # How the backbone map becomes the condition head's 256 input multivectors. "pooled": global
+    # average pool, then 8 consecutive channels are declared one multivector (the 8.95 deg
+    # recipe), so the "vectors" do not rotate with the image. "so2": keep the 7x7 map, feature
+    # channels stay scalars and the vector / bivector parts are feature-weighted sums of each
+    # cell's in-plane direction from the image centre, plus a constant optical-axis (e3) token:
+    # rotating the image by 90 deg rotates every token about e3 exactly (models/so2_head.py).
+    # Without conv_adapter, fisher_prior. so2_channels = width of its first 1x1 conv.
+    # "dircloud" (P1, reports/geometric_redesign.md): nothing is pooled; every cell of the 7x7 map is
+    # its own GATr token, its fixed viewing direction as the vector part and dircloud_scalars
+    # features as scalar channels, plus the e3 axis (models/dircloud_head.py). Needs
+    # pose_tokens=frame_pin and condition_head=none.
+    # "spherecloud": P1 with the SO(3)-Fourier head's sphere instead of the 7x7 cells: the 88 HEALPix hemisphere
+    # points as vectors, their lifted signal (dircloud_scalars channels, not layer-normed) as scalars, plus e3
+    # (models/dircloud_head.py, SphereCloudHead). Needs pose_tokens=frame_pin, condition_head=none.
+    # "points" / "pointsphere" (dataset modelnet10_points): a point cloud instead of an image. "points": every point
+    # is a GATr token (vector x_i, scalar |x_i|), with pose_tokens=frame_pin; "pointsphere": radial features of the
+    # points as signals on the sphere -> the SO(3)-Fourier head (vector_field=so3fourier).
+    # "pointcloud": the 8.95 recipe on points: condition_head=gatr compresses the cloud into n_cond_mv PGA tokens
+    # (PointGATrEncoder: points as trivectors + centre vectors), vector_field=gatr reads [pose, those tokens],
+    # pose_tokens=frame_pin.
+    cond_tokens: Literal["pooled", "so2", "dircloud", "spherecloud", "sphere", "points", "pointsphere",
+                         "pointcloud", "pointgatrsphere", "spheregatr"] = "pooled"   # sphere: so3fourier / rotorcorr
+    dircloud_scalars: int = 64
+    # With cond_tokens=dircloud: also feed a constant image-up token (-e2). Breaks P1's exact 90 deg turn
+    # symmetry, keeps the flip, and lets the head read in-plane orientation from the ResNet's channels
+    # (models/dircloud_head.py; reports/symsol_p1_stall.md).
+    dircloud_up_token: bool = False
+    so2_channels: int = 128
+    # With cond_tokens=so2: also feed a constant image-up token (-e2). Breaks the in-plane SO(2) on
+    # purpose (Pascal3D photos are upright) so the model has an in-plane reference from step one;
+    # without it v2 sat 17 epochs at ~100 deg before learning one from the image.
+    so2_up_token: bool = False
+    # With cond_tokens=so2: normalise the invariant and the directional slots separately (own gains),
+    # so the directional ones do not start ~20x smaller and the conditioning is not invariant at init.
+    so2_split_norm: bool = False
+    # How the GATr vector field sees the current pose. "rotor": one rotor token, which GATr's
+    # sandwich action conjugates (R -> G R G^T), unlike a camera rotation (R -> G R).
+    # "frame": three vector tokens R e1, R e2, R e3, with the velocity read out in the camera
+    # frame, so GATr's symmetry is the physical one. Pairs with cond_tokens=so2; GATr only.
+    # "frame_ch": the same three vectors as three channels of ONE token, so geometric products inside
+    # that token can combine the pose with image directions from the first block (with "frame" the
+    # read-out token holds only R e1 and starts as a pose- and image-independent constant).
+    # "frame_pin" (P1, with cond_tokens=dircloud): R e2, R e3 as vectors and R e1 as the bivector
+    # (R e1) e123, the velocity read out as a bivector, so the flow is exactly equivariant to
+    # 90 deg turns and left-right flips of the map (GATrCloudField in models/gatr_denoiser.py).
+    pose_tokens: Literal["rotor", "frame", "frame_ch", "frame_pin"] = "rotor"
     gatr_blocks: int = 4
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token
@@ -271,9 +389,64 @@ class FlowConfig:
     # compilation for quick debugging.
     gatr_dense_linear: bool = True
     gatr_compile: bool = True
+    # Zero the GATr read-out so training starts from a zero velocity field. With frame_pin (P1) the pose token's
+    # bivector channels all start as copies of the pose bivector (R e1) e123, so a zero read-out leaves exactly one
+    # learnable direction and no gradient anywhere upstream; under a uniform pose prior (SYMSOL) its expected
+    # gradient is zero and the flow never leaves v = 0. --no-gatr_zero_readout keeps GATr's own initialisation, so
+    # every layer gets a gradient from the first step; the initial velocity is then a constant body-frame spin
+    # about e1 (~0.3 rad over the flow), which leaves the uniform starting distribution unchanged.
+    gatr_zero_readout: bool = True
+    # P1 (frame_pin): an equivariant LayerNorm before the GATr read-out, as DiT's norm_final. Without it P1
+    # switched the SYMSOL polyhedra off by shrinking their hidden state ~15x, which starved their gradients
+    # (reports/symsol_p1_stall.md). Exactly equivariant: the turn and flip symmetries are unchanged.
+    gatr_final_norm: bool = False
+    # With pose_tokens=frame_pin: give every condition token the spherical harmonics (l <= L) of its vector part in
+    # the current pose's frame as extra invariant scalars (49 for L = 6): explicit high angular frequencies in the
+    # pose for the GATr field (the test of reports/frequency_hypothesis_ru.md). 0 = off.
+    gatr_pose_harmonics: int = 0
+    # cond_tokens=pointgatrsphere (GA-encoder + Fourier hybrid, vector_field=so3fourier): a GATr encoder of
+    # gatr_enc_blocks blocks (gatr_mv/s_channels, gatr_heads) gives every point so3f_s2_channels invariant weights
+    # for the harmonics at its own direction (models/so3fourier_head.py, PointGATrSphereHead).
+    gatr_enc_blocks: int = 2
+    # ---- the two-tower model (experimental, models/stf_track.py) -------------------------------------------------
+    # Add a second feature track of symmetric traceless Cartesian tensors (STF) of ranks 2..stf_lmax next to the
+    # multivectors. Multivectors only hold degree 0 and 1 of SO(3); an STF tensor of rank l is the degree-l irrep
+    # (2l + 1 numbers), so the flow can depend on the rotor with degree l >= 2 (reports/ga_high_degree_irreps.md,
+    # CliffordSTF, arXiv 2606.29584). The grade-1 parts of the condition multivectors build the tensors by the
+    # closed-form recursion STF_l(S, v); the tensors come back to the grade-1 parts by contraction (a residual) and
+    # reach the GATr vector field as invariant scalars of the rotor token. Needs vector_field=gatr, cond_tokens=pooled
+    # and pose_tokens=rotor (the defaults). Off: the reference model, bit for bit.
+    stf_track: bool = False
+    # Highest STF rank (2..6); rank l holds stf_channels tensors of 2l + 1 independent components each.
+    stf_lmax: int = 3
+    stf_channels: int = 8
+    # How the vector field sees the tensors S_l and the current rotation matrix R (stf_track.stf_invariants):
+    # "gram": <S_c, R S_c'> between the channels (invariant when everything is conjugated by one rotation, GATr's own
+    # symmetry, so the whole flow keeps the equivariance of the control); "frame": the components of R^T S_c, S in
+    # the body frame of R (invariant when S and R are rotated from the left; not under conjugation).
+    stf_inject: Literal["gram", "frame"] = "gram"
     # Path to Liu et al.'s Pascal3D+ matrix Fisher checkpoint (state_dict_119.pkl);
     # used only with Features.fisher_prior.
     fisher_checkpoint: Optional[str] = None
+    # --model dit_flow: the transformer baseline (see models/dit_flow.py). Both heads are this
+    # wide; n_cond_mv sets its number of condition tokens. 112 keeps the two heads near
+    # CliffordFlow's ~1.13M non-backbone parameters.
+    dit_dim: int = 112
+    dit_blocks: int = 4
+    dit_heads: int = 4
+    dit_mlp_ratio: float = 4.0
+    # 0: DiT sees the pose as its rotation matrix. L > 0: as the Wigner-D matrices D^l(R), l = 1..L (no symmetry
+    # constraint): isolates the harmonic pose description of --vector_field so3fourier from its equivariance.
+    dit_pose_lmax: int = 0
+    # DiT reads the SO(3)-Fourier head's input: 1x1 conv (so3f_s2_channels) + lift onto the so3f_nside hemisphere
+    # points, one token per point (features + direction), instead of the pooled backbone vector.
+    dit_sphere_tokens: bool = False
+    # --model mlp_flow sizes (defaults: the original MLPFlow, ~1.28M params after a ResNet-50 with its conv
+    # adapter). --no-mlp_conv_adapter feeds the pooled backbone vector, as DiTFlow.
+    mlp_cond_hidden: int = 210
+    mlp_cond_features: int = 512
+    mlp_field_hidden: int = 128
+    mlp_conv_adapter: bool = True
 
 
 @dataclass
@@ -285,10 +458,19 @@ class I2SConfig:
     n_mv: int = 8
     ga_pool_hw: Tuple[int, int] = (28, 28)
     temperature: float = 1.0
-    # i2s_real: eval grid level (upstream's 5 needs a 4.3 GB Wigner matrix).
+    # i2s_real: SO(3) HEALPix level of the evaluation grid (argmax and SYMSOL log-likelihood). 3 is upstream's
+    # default (36,864 rotations, 7.5 deg); the paper evaluates on 5 (2.36M rotations, 1.875 deg), a 4.3 GB
+    # Wigner matrix that is built in chunks on the GPU, so it needs a card with room for it.
     i2s_eval_rec_level: int = 3
     # i2s_real: apply ImageNet normalisation to the [0, 1] inputs.
     i2s_normalize: bool = True
+    # wignerd: weights w_l of the frequency-domain MSE (paper eq. 4; the paper does not spell them out).
+    # "unit": 1 / (2l+1)^2, so every degree's block of the target has unit squared norm (flat_wigner scales
+    # degree l by sqrt(2l+1)); "uniform": all 1, which lets the high degrees dominate.
+    wigner_loss_weights: Literal["unit", "uniform"] = "unit"
+    # wignerd: "sum" adds the weighted squared errors of the 455 coefficients, "mean" divides that by 455 (torch's MSELoss default).
+    # The paper writes the sum (eq. 4) and calls it MSE, and its lr 0.1 only makes sense against one of the two scales.
+    wigner_loss_reduction: Literal["sum", "mean"] = "sum"
 
 
 @dataclass

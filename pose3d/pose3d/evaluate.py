@@ -112,8 +112,22 @@ def build_model(checkpoint, device, eval_rec_level=None):
         mlp_heads=saved.get("mlp_heads", False),
         vector_field=saved.get("vector_field", "clifford"),
         condition_head=saved.get("condition_head", "clifford"),
+        cond_tokens=saved.get("cond_tokens", "pooled"),
+        so2_channels=saved.get("so2_channels", 128),
+        so2_up_token=saved.get("so2_up_token", False),
+        so2_split_norm=saved.get("so2_split_norm", False),
+        pose_tokens=saved.get("pose_tokens", "rotor"),
+        dircloud_scalars=saved.get("dircloud_scalars", 64),
+        dircloud_up_token=saved.get("dircloud_up_token", False),
+        gatr_final_norm=saved.get("gatr_final_norm", False),
+        so3fourier=dict(lmax=saved.get("so3f_lmax", 6), c_s=saved.get("so3f_s2_channels", 32),
+                        c_f=saved.get("so3f_so3_channels", 8), hidden=saved.get("so3f_hidden", 44),
+                        nside=saved.get("so3f_nside", 4), flip_symmetrize=saved.get("so3f_flip_symmetrize", True),
+                        canonicalize=saved.get("so3f_canonicalize", True)),
         gatr=dict(num_blocks=saved.get("gatr_blocks", 4), mv_channels=saved.get("gatr_mv_channels", 8),
                   s_channels=saved.get("gatr_s_channels", 32), num_heads=saved.get("gatr_heads", 4)),
+        stf_track=saved.get("stf_track", False), stf_lmax=saved.get("stf_lmax", 3),
+        stf_channels=saved.get("stf_channels", 8), stf_inject=saved.get("stf_inject", "gram"),
     )
 
     result = model.load_state_dict(checkpoint["model"], strict=False)

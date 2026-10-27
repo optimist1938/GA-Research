@@ -30,9 +30,14 @@ class I2SReal(nn.Module):
         `include_class_label` is off for PASCAL3D+. A zero tensor stands in, and
         `InMemoryDataset` drops `cls` anyway.
       * upstream `predict` evaluates on CPU and returns CPU rotations, because
-        `eval_wigners` is a plain attribute that never follows the model to GPU.
-        The harness compares against a CUDA ground truth, so the grid is held as
-        a buffer here and the argmax runs on-device.
+        `eval_wigners` is a plain attribute that never follows the model to GPU, and
+        builds the whole Wigner matrix of the evaluation grid in `__init__` (level 5,
+        the paper's 1.875 deg grid, is 455 x 2.36M floats: 4.3 GB, several times that
+        while building). Here the grid is built lazily, in chunks, on the device that
+        scores, and the argmax runs there against the harness's CUDA ground truth.
+
+    `grid_logits` exposes the scores over that grid, so the SYMSOL log-likelihood is
+    read off the same histogram upstream's `evaluate_ll` uses (engine/grid_model_likelihood.py).
     """
 
     def __init__(
@@ -84,7 +89,7 @@ class I2SReal(nn.Module):
                 lmax=lmax,
                 train_grid_rec_level=rec_level,
                 train_grid_mode="healpix",
-                eval_grid_rec_level=eval_rec_level,
+                eval_grid_rec_level=1,   # a stand-in; the real grid is built lazily (see _eval_grid)
                 eval_use_gradient_ascent=False,
                 include_class_label=False,
             )
@@ -103,15 +108,12 @@ class I2SReal(nn.Module):
             # through it and no explicit no_grad is needed.
             freeze_encoder(self.net.encoder)
 
-        # Upstream leaves these as plain attributes so its own predict() can run
-        # the rec_level-5 matmul on CPU. Re-registering them as buffers keeps
-        # them beside the model instead.
-        eval_wigners = self.net.eval_wigners
-        eval_rotmats = self.net.eval_rotmats
+        # Upstream's level-1 stand-in grid is dropped; the evaluation grid is built on first use.
         del self.net.eval_wigners
         del self.net.eval_rotmats
-        self.net.register_buffer("eval_wigners", eval_wigners, persistent=False)
-        self.net.register_buffer("eval_rotmats", eval_rotmats, persistent=False)
+        self.lmax = lmax
+        self.eval_rec_level = eval_rec_level
+        self._grid = None
 
         # Pascal3D hands over [0, 1] images. Upstream feeds those straight to an
         # ImageNet-pretrained ResNet, but every other pretrained path in this repo
@@ -146,8 +148,33 @@ class I2SReal(nn.Module):
         return loss
 
     @torch.no_grad()
+    def _eval_grid(self, device):
+        """(Wigner matrix (M, Q), rotations (Q, 3, 3)) of the SO(3) HEALPix evaluation grid, built in chunks on
+        `device` the first time and cached. Level 3 (upstream's default) is 36,864 rotations, level 5 (the
+        paper's evaluation) 2,359,296: a 4.3 GB float32 matrix, which only fits built chunk by chunk."""
+        device = torch.device(device)
+        if self._grid is None or self._grid[0].device != device:
+            from e3nn import o3
+            from image2sphere import so3_utils
+
+            a, b, g = (t.to(device) for t in so3_utils.so3_healpix_grid(rec_level=self.eval_rec_level))
+            q = a.numel()
+            m = sum((2 * l + 1) ** 2 for l in range(self.lmax + 1))
+            wig = torch.empty(m, q, device=device)
+            for i in range(0, q, 65536):
+                wig[:, i:i + 65536] = so3_utils.flat_wigner(self.lmax, a[i:i + 65536], b[i:i + 65536],
+                                                            g[i:i + 65536]).T
+            self._grid = (wig, o3.angles_to_matrix(a, b, g))
+        return self._grid
+
+    @torch.no_grad()
+    def grid_logits(self, img: torch.Tensor) -> torch.Tensor:
+        """Unnormalised log-probabilities of every evaluation-grid rotation, (B, Q): the softmax over them is
+        upstream's `compute_probabilities`, the histogram its SYMSOL log-likelihood is read from."""
+        wig, _ = self._eval_grid(img.device)
+        return torch.matmul(self.forward(img).squeeze(1).float(), wig)
+
+    @torch.no_grad()
     def predict(self, img: torch.Tensor) -> torch.Tensor:
-        fourier = self.forward(img)
-        probs = torch.matmul(fourier, self.net.eval_wigners).squeeze(1)
-        idx = probs.max(dim=1)[1]
-        return self.net.eval_rotmats[idx].to(img.device)
+        _, rots = self._eval_grid(img.device)
+        return rots[self.grid_logits(img).argmax(dim=1)]

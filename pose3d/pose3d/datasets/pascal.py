@@ -230,7 +230,7 @@ def create_dataloaders(cfg):
         from pose3d.datasets.modelnet import DummyPointCloudDataset
         train_dataset = DummyPointCloudDataset(cfg, size=1000)
         val_dataset = DummyPointCloudDataset(cfg, size=100)
-    elif cfg.run.dataset in ("modelnet10", "symsol"):
+    elif cfg.run.dataset in ("modelnet10", "symsol", "modelnet10_points", "symsol_points"):
         from pose3d.datasets.benchmarks import create_benchmark_datasets
         train_dataset, val_dataset = create_benchmark_datasets(cfg)
     elif not cfg.run.sanity_check:

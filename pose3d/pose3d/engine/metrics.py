@@ -72,11 +72,29 @@ def macro_metrics(err, cls):
     }
 
 
+def nearest_equivalent_error(pred, rots_eq, n_eq):
+    """Degrees from each prediction (B, 3, 3) to the nearest of its equivalent poses (B, K, 3, 3), the first
+    n_eq of which are valid (SYMSOL: a symmetric object has no single right answer)."""
+    cos = ((pred.unsqueeze(1).transpose(-1, -2) @ rots_eq).diagonal(dim1=-2, dim2=-1).sum(-1) - 1) / 2
+    err = torch.rad2deg(torch.arccos(cos.clamp(-1.0, 1.0)))
+    valid = torch.arange(rots_eq.shape[1], device=err.device)[None] < n_eq.to(err.device)[:, None]
+    return err.masked_fill(~valid, float("inf")).min(1).values.cpu().numpy()
+
+
 def rotation_error_with_projection(input, target):
     input = project_to_orthogonal_manifold(input)
     target = project_to_orthogonal_manifold(target)
     err = rotation_error(input, target) / torch.pi * 180
     return err.cpu().numpy()
+
+
+def nearest_equivalent_error(pred, rots_eq, n_eq):
+    """Degrees from each prediction (B, 3, 3) to the nearest of its equivalent poses (B, K, 3, 3), the first
+    n_eq of which are valid (SYMSOL: a symmetric object has no single right answer)."""
+    cos = ((pred.unsqueeze(1).transpose(-1, -2) @ rots_eq).diagonal(dim1=-2, dim2=-1).sum(-1) - 1) / 2
+    err = torch.rad2deg(torch.arccos(cos.clamp(-1.0, 1.0)))
+    valid = torch.arange(rots_eq.shape[1], device=err.device)[None] < n_eq.to(err.device)[:, None]
+    return err.masked_fill(~valid, float("inf")).min(1).values.cpu().numpy()
 
 
 def _supports_class_argument(method) -> bool:
@@ -163,6 +181,10 @@ def _evaluation_errors(model, loader, cfg, n_samples, return_classes):
                 outputs = model(img)
             pred_rotmat = decode_output(model, outputs, cfg)
 
+        if "rots_eq" in batch:
+            err.append(nearest_equivalent_error(project_to_orthogonal_manifold(pred_rotmat),
+                                                batch["rots_eq"].to(device), batch["n_eq"]))
+            continue
         gt_rotmat = batch['rot'].to(device)
         err.append(rotation_error_with_projection(pred_rotmat, gt_rotmat))
     err = gather_errors(np.hstack(err))

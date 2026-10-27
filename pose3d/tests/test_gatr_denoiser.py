@@ -261,3 +261,28 @@ def test_bf16_backbone_only_where_the_hardware_has_bf16(monkeypatch):
     assert _native_bf16(cuda)
     assert _native_bf16(torch.device("cpu"))
     assert not _native_bf16(torch.device("mps"))
+
+
+def test_895_recipe_with_pose_harmonics_trains_and_samples():
+    """The 8.95 recipe (pooled condition, Clifford condition head, GATr field over [rotor, t, condition]) with
+    --gatr_pose_harmonics 6: every condition token gets 49 harmonics of its vector part in the pose's frame."""
+    from pose3d.models.gatr_denoiser import _ensure_xformers_stub
+    _ensure_xformers_stub()
+    pytest.importorskip("gatr")
+    pytest.importorskip("e3nn")
+    from clifford.algebra.cliffordalgebra import CliffordAlgebra
+    from pose3d.config import parse_args
+    from pose3d.geometry.rotor import random_rotor, rotor_to_matrix
+    from pose3d.models import build_model
+
+    torch.manual_seed(0)
+    base = ["--path_to_datasets", "x", "--vector_field", "gatr", "--no-pretrained_backbone", "--encoder", "resnet50",
+            "--gatr_mv_channels", "4", "--gatr_s_channels", "8", "--gatr_blocks", "1", "--n_cond_mv", "4"]
+    model = build_model(parse_args(base + ["--gatr_pose_harmonics", "6"]), CliffordAlgebra((1, 1, 1)))
+    plain = build_model(parse_args(base), CliffordAlgebra((1, 1, 1)))
+    assert model.vector_field.extra_scalars == 49 and plain.vector_field.extra_scalars == 0
+    img = torch.randn(2, 3, 224, 224)
+    loss = model.compute_loss(img, rotor_to_matrix(random_rotor(2), model.algebra))
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.eval().predict(img, n_samples=2, steps=2).shape == (2, 3, 3)

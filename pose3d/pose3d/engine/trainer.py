@@ -11,6 +11,9 @@ from tqdm import tqdm
 from pose3d.engine.distributed import (
     all_reduce_sum, is_main, sync_buffers, wrap_ddp,
 )
+from pose3d.datasets.modelnet_points import CLASSES as MODELNET10_CLASSES
+from pose3d.datasets.symsol import SHAPE_SETS
+from pose3d.engine.likelihood import LOG_UNIFORM, symsol_log_likelihood
 from pose3d.engine.metrics import acc_at, calculate_evaluation_metrics, macro_metrics
 from pose3d.engine.tracking import log_offline_sync
 
@@ -41,9 +44,13 @@ def _compute_loss(model, data, criterion, cfg):
     if hasattr(model, "compute_loss") and callable(getattr(model, "compute_loss")):
         # Important: avoid a duplicate forward pass before model.compute_loss(),
         # which can skew BatchNorm running statistics during training.
-        if clas is not None and "cls" in inspect.signature(model.compute_loss).parameters:
-            return model.compute_loss(img, targets, criterion, cls=clas)
-        return model.compute_loss(img, targets, criterion)
+        params = inspect.signature(model.compute_loss).parameters
+        extra = {}
+        if getattr(cfg.data, "symsol_nearest_coupling", False) and "rots_eq" in data and "rots_eq" in params:
+            extra = dict(rots_eq=data["rots_eq"].to(cfg.device), n_eq=data["n_eq"].to(cfg.device))
+        if clas is not None and "cls" in params:
+            return model.compute_loss(img, targets, criterion, cls=clas, **extra)
+        return model.compute_loss(img, targets, criterion, **extra)
 
     if clas is not None and _supports_class_argument(model.forward):
         outputs = model(img, clas)
@@ -95,13 +102,15 @@ def train_epoch(model, loader, optimizer, criterion, cfg, step=None, ema=None):
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if cfg.train.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.train.grad_clip)
 
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if cfg.train.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.train.grad_clip)
             optimizer.step()
         if ema is not None:
             ema.update_parameters(model)
@@ -131,6 +140,17 @@ def validate_epoch(model, loader, criterion, cfg):
     return total_loss / max(n_objects, 1)
 
 
+def log_viz(model, val_loader, run, cfg, final=False, commit=False):
+    """Flow-trajectory visualizations to W&B (see engine/flow_viz.py). A failure here is reported and never stops the run."""
+    if run is None or not cfg.run.log_viz or not is_main() or not hasattr(model, "velocity"):
+        return
+    try:
+        from pose3d.engine.flow_viz import wandb_media
+        run.log(wandb_media(model, val_loader.dataset, n=cfg.run.viz_images, final=final), commit=commit)
+    except Exception as e:
+        print(f"Visualization logging skipped: {type(e).__name__}: {e}")
+
+
 def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg):
     """Train, then score; returns the model that was evaluated (the EMA copy with --ema)."""
     n_epochs = cfg.train.n_epochs
@@ -158,12 +178,16 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             "train_loss": train_loss,
             "val_loss": val_loss,
             "median_rotation_error": mre,
+            "acc@15": acc_at(err, 15),   # the share of validation images within 15 deg (primary metric on SYMSOL)
+            "acc@30": acc_at(err, 30),
             "learning_rate": scheduler.get_last_lr()[0],
             "gradient_norm": grad_norm(model),
             "epoch_time": time.time() - t0,
         }
         if macro is not None:
             metrics["class_mean_median_error"] = macro["class_mean_median_error"]
+        if cfg.run.viz_every > 0 and (i + 1) % cfg.run.viz_every == 0:
+            log_viz(model, val_loader, run, cfg, commit=False)   # joins this epoch's step instead of opening one
         if run is not None:
             run.log(metrics)
         scheduler.step()
@@ -171,13 +195,18 @@ def train(model, train_loader, val_loader, optimizer, scheduler, criterion, run,
             print(
                 f"Training on {cfg.device} epoch {i + 1} / {n_epochs}. \n"
                 f"Train loss {train_loss}, val loss {val_loss}\n"
-                f"Median rotation error {mre} ({time.time() - t0:.0f}s)"
+                f"Median rotation error {mre}, acc@15 {metrics['acc@15']:.4f}, acc@30 {metrics['acc@30']:.4f} "
+                f"({time.time() - t0:.0f}s)"
             )
             if macro is not None:
                 print(f"Class-mean median rotation error {macro['class_mean_median_error']}")
             log_offline_sync(run, cfg, step=i, metrics=metrics)
 
     final_evaluation(eval_model, val_loader, run, cfg, raw_model=model if ema is not None else None)
+    log_viz(eval_model, val_loader, run, cfg, final=True, commit=True)
+    if cfg.run.dataset == "symsol" and hasattr(eval_model, "grid_logits") and is_main():
+        from pose3d.engine.symsol_ll import symsol_final_log_likelihood
+        symsol_final_log_likelihood(eval_model, cfg, run)
     return eval_model
 
 
@@ -223,6 +252,33 @@ def final_evaluation(model, val_loader, run, cfg, raw_model=None):
         if macro_raw is not None:
             metrics["final_class_mean_median_error_raw"] = macro_raw["class_mean_median_error"]
 
+    if cfg.run.dataset in ("symsol", "symsol_points") and cfg.data.symsol_likelihood:
+        # The SYMSOL metric (IPDF / Image2Sphere / Howell et al.): mean log-likelihood over each image's
+        # equivalent poses, averaged per shape and then over shapes.
+        d = cfg.data
+        if hasattr(model, "grid_logits"):
+            # A distribution over Image2Sphere's grid (I2SReal): read off the histogram, as upstream does.
+            from pose3d.engine.grid_model_likelihood import grid_model_log_likelihood
+            ll, ll_cls = grid_model_log_likelihood(model, val_loader, cfg.device, n_equivalents=d.symsol_ll_equivalents)
+        else:
+            try:
+                ll, ll_cls = symsol_log_likelihood(model, val_loader, cfg.device, n_equivalents=d.symsol_ll_equivalents,
+                                                   steps=d.symsol_ll_steps)
+            except Exception:   # the rotation errors above and the checkpoint must survive a likelihood failure
+                import traceback
+                traceback.print_exc()
+                print("SYMSOL log-likelihood failed (see the traceback above); final_log_likelihood is NaN")
+                ll, ll_cls = np.full(1, np.nan), np.zeros(1, dtype=int)
+        per_shape = {int(c): float(ll[ll_cls == c].mean()) for c in np.unique(ll_cls)}
+        metrics["final_log_likelihood"] = float(np.mean(list(per_shape.values())))
+        for c, v in per_shape.items():
+            metrics[f"final_log_likelihood_class{c}"] = v
+        if is_main():
+            names = SHAPE_SETS[d.symsol_set]
+            print(f"SYMSOL log-likelihood (mean over shapes, uniform = {LOG_UNIFORM:.2f}): "
+                  f"{metrics['final_log_likelihood']:.3f}  "
+                  + "  ".join(f"{names[c]} {v:.3f}" for c, v in per_shape.items()))
+
     if is_main():
         print(
             f"Final evaluation with {n_samples} samples per image: "
@@ -240,7 +296,9 @@ def final_evaluation(model, val_loader, run, cfg, raw_model=None):
                       f"class mean {metrics.get('final_class_mean_median_error_raw')}")
             print(f"{'class':>12} {'median':>8} {'acc@15':>8} {'acc@30':>8}")
             for c, m in macro["class_medians"].items():
-                name = PASCAL3D_CLASSES[c] if cfg.run.dataset == "pascal" and c < len(PASCAL3D_CLASSES) else str(c)
+                name = (PASCAL3D_CLASSES[c] if cfg.run.dataset == "pascal" and c < len(PASCAL3D_CLASSES)
+                        else SHAPE_SETS[cfg.data.symsol_set][c] if cfg.run.dataset in ("symsol", "symsol_points")
+                        else MODELNET10_CLASSES[c] if cfg.run.dataset.startswith("modelnet10") else str(c))
                 print(f"{name:>12} {m:>8.2f} {macro['class_acc@15'][c]:>8.3f} {macro['class_acc@30'][c]:>8.3f}")
         log_offline_sync(run, cfg, step=cfg.train.n_epochs, metrics=metrics, final=True)
     if run is not None:

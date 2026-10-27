@@ -64,6 +64,15 @@ def relative_log(R0: torch.Tensor, R1: torch.Tensor) -> torch.Tensor:
     return log_map(R0.transpose(-1, -2) @ R1)
 
 
+def nearest_equivalent(R0: torch.Tensor, rots_eq: torch.Tensor, n_eq: torch.Tensor) -> torch.Tensor:
+    """The equivalent pose nearest each R0, (n, 3, 3): the largest trace(R0^T S_k), i.e. the smallest rotation
+    angle. rots_eq (n, K, 3, 3) is padded; only its first n_eq rows per sample count."""
+    tr = torch.einsum("nij,nkij->nk", R0, rots_eq)
+    valid = torch.arange(rots_eq.shape[1], device=R0.device)[None] < n_eq.to(R0.device)[:, None]
+    k = tr.masked_fill(~valid, float("-inf")).argmax(1)
+    return rots_eq[torch.arange(R0.shape[0], device=R0.device), k]
+
+
 def geodesic_distance(R0: torch.Tensor, R1: torch.Tensor) -> torch.Tensor:
     return relative_log(R0, R1).norm(dim=-1)
 
