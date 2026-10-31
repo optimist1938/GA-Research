@@ -33,8 +33,31 @@ SYN_CLASS_IDS = ('02691156', '02834778', '02858304', '02876657', '02924116', '02
                  '03001627', '04379243', '03790512', '04256520', '04468005', '03211117')
 
 
+class _MappedBin:
+    """Read-only np.memmap of each file, addressed by the same flat offsets as _read_bin's buffer. The bytes live
+    once in the OS page cache, shared by every DDP rank and DataLoader worker (the in-RAM buffer is one 18 GB copy
+    per rank)."""
+
+    def __init__(self, paths):
+        self.maps = [np.memmap(p, dtype=np.uint8, mode='r') for p in paths]
+        self.starts = np.cumsum([0] + [len(m) for m in self.maps])
+
+    def bytes(self, a, b):
+        i = int(np.searchsorted(self.starts, a, side='right')) - 1
+        s = int(self.starts[i])
+        return self.maps[i][a - s:b - s].tobytes()
+
+
+def _raw(buf, a, b):
+    return buf.bytes(a, b) if isinstance(buf, _MappedBin) else buf[a:b].numpy().tobytes()
+
+
 def _read_bin(paths):
-    """All files into one flat uint8 tensor (one big buffer: forked DataLoader workers share it without copying)."""
+    """All files into one flat uint8 tensor (one big buffer: forked DataLoader workers share it without copying).
+    With PACKED_MMAP=1 in the environment: a _MappedBin instead."""
+    if os.environ.get('PACKED_MMAP') == '1':
+        mapped = _MappedBin(paths)
+        return mapped, mapped.starts
     sizes = [os.path.getsize(p) for p in paths]
     buf = torch.empty(sum(sizes), dtype=torch.uint8)
     arr = buf.numpy()
@@ -121,7 +144,7 @@ class PackedReal(Dataset):
 
     def __getitem__(self, i):
         r = self.idx[i]
-        raw = self.buf[int(r['off']):int(r['off']) + int(r['len'])].numpy().tobytes()
+        raw = _raw(self.buf, int(r['off']), int(r['off']) + int(r['len']))
         img = _decode(raw)
         H, W = img.shape[:2]
         flip = np.random.randint(2) if self.use_warp else 0
@@ -157,7 +180,7 @@ class PackedSynth(Dataset):
     def __getitem__(self, i):
         r = self.idx[self.sel[i]]
         start = int(self.shard_start[int(r['shard'])]) + int(r['off'])
-        img = _decode(self.buf[start:start + int(r['len'])].numpy().tobytes())
+        img = _decode(_raw(self.buf, start, start + int(r['len'])))
         w0, h0 = int(r['w0']), int(r['h0'])
         a = int(r['a']) if self.relabel else int(r['a_file'])
         t = int(r['t'])

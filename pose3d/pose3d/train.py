@@ -1,4 +1,5 @@
 """Training entry point: `python -m pose3d --path_to_datasets=... [flags]`."""
+import os
 
 from pathlib import Path
 
@@ -118,12 +119,22 @@ def instantiate(cfg: Config):
 def main(argv=None):
     cfg = parse_args(argv)
     distributed.maybe_relaunch(cfg, argv)   # with --ddp on several GPUs this becomes torchrun
+    # POSE3D_STACKDUMP=<s>: every rank prints all thread stacks every <s> seconds until the model is built (to locate a
+    # start-up hang from the Kaggle log), then once more 20 min later in case the first batches hang.
+    dump = int(os.environ.get('POSE3D_STACKDUMP', '0'))
+    if dump:
+        import faulthandler
+        faulthandler.dump_traceback_later(dump, repeat=True)
 
     torch.backends.cudnn.benchmark = True
     distributed.setup(cfg)
     distributed.seed_everything(cfg)
 
     train_loader, val_loader, model, optimizer, scheduler, criterion, run = instantiate(cfg)
+    if dump:
+        faulthandler.cancel_dump_traceback_later()
+        faulthandler.dump_traceback_later(1200, repeat=False)
+        print(f"[rank {cfg.rank}] model built, loaders ready", flush=True)
 
     path = cfg.run.path_to_checkpoint
     if path is not None:
@@ -141,7 +152,7 @@ def main(argv=None):
     # With --ema the averaged copy is the model that was scored, so it is what gets saved.
     model = train(model, train_loader, val_loader, optimizer, scheduler, criterion, run, cfg)
 
-    if cfg.run.save_checkpoint and not cfg.run.sanity_check and distributed.is_main():
+    if model is not None and cfg.run.save_checkpoint and not cfg.run.sanity_check and distributed.is_main():
         checkpoint_path = form_checkpoint(model, optimizer, scheduler, cfg)
         wandb_log_artifact(run, checkpoint_path, artifact_type="checkpoint")
     wandb_finish_run(run)

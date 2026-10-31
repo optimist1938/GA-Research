@@ -61,9 +61,36 @@ class Symsol(Dataset):
             self.rots.extend(torch.from_numpy(to_camera_frame(r)))
             files += [os.path.join(path, "images", f"{name}_{i:05d}.png") for i in range(len(r))]
             cls += [c] * len(r)
-        with ThreadPoolExecutor(workers) as pool:
-            images = list(pool.map(_read_png, files))
-        self.images = torch.from_numpy(np.stack(images)).permute(0, 3, 1, 2).contiguous()   # (N, 3, H, W) uint8
+        cache_dir = os.environ.get("SYMSOL_SHARED_CACHE")
+        if cache_dir:
+            # CPU file-backed uint8 pixels are shared by both ranks. No augmentation or label change.
+            import fcntl
+            import hashlib
+            os.makedirs(cache_dir, exist_ok=True)
+            digest = hashlib.sha256("\n".join(files).encode()).hexdigest()[:20]
+            target = os.path.join(cache_dir, digest + ".npy")
+            with open(target + ".lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if not os.path.exists(target):
+                    first = _read_png(files[0])
+                    shape = (len(files), 3, first.shape[0], first.shape[1])
+                    temp = target + ".partial"
+                    pixels = np.lib.format.open_memmap(temp, mode="w+", dtype=np.uint8, shape=shape)
+                    with ThreadPoolExecutor(min(workers, 16)) as pool:
+                        for start in range(0, len(files), 128):
+                            for j, image in enumerate(pool.map(_read_png, files[start:start + 128])):
+                                pixels[start + j] = image.transpose(2, 0, 1)
+                    pixels.flush()
+                    del pixels
+                    os.replace(temp, target)
+                    print(f"Built shared SYMSOL pixel cache: {shape}", flush=True)
+            # Copy-on-write mapping is writable for torch, but normal access only reads pixels.
+            pixels = np.load(target, mmap_mode="c")
+            self.images = torch.from_numpy(pixels)
+        else:
+            with ThreadPoolExecutor(workers) as pool:
+                images = list(pool.map(_read_png, files))
+            self.images = torch.from_numpy(np.stack(images)).permute(0, 3, 1, 2).contiguous()
         self.cls = torch.tensor(cls, dtype=torch.long)
 
     def __len__(self):

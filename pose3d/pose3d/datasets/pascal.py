@@ -1,6 +1,7 @@
 """Pascal3D+ data loading (image2sphere's Pascal3D) with the RAM-cache and augmentation options."""
 
 import gc
+import os
 import pathlib
 import tempfile
 import time
@@ -151,6 +152,16 @@ def _attach_eval_classes(ds, cfg, real=None):
     """
     if getattr(ds, "eval_clss", None) is not None or getattr(ds, "clss", None) is not None:
         return
+    # POSE3D_VAL_CLASSES=<file.npy>: labels computed once before the DDP launch (by _class_labels on the same
+    # Pascal3D(train=False) order), so the ranks do not each scan the dataset tree (very slow on a lazy /kaggle/input).
+    pre = os.environ.get("POSE3D_VAL_CLASSES")
+    if pre and os.path.exists(pre):
+        classes = np.load(pre)
+        if len(classes) == len(ds):
+            ds.set_eval_classes([int(c) for c in classes])
+            print(f"Per-class metrics: {len(classes)} val labels from {pre}", flush=True)
+            return
+        print(f"POSE3D_VAL_CLASSES: {len(classes)} labels for {len(ds)} cached samples, scanning instead", flush=True)
     verify = real is None
     try:
         if real is None:

@@ -93,10 +93,15 @@ class SO2ConditionHead(nn.Module):
         b, _, h, w = fmap.shape
         if (h, w) != (self.grid, self.grid):
             raise ValueError(f"SO2ConditionHead expects a {self.grid}x{self.grid} map, got {h}x{w}")
-        weights = self.maps(self.reduce(fmap)).flatten(2)                # (B, 6k, cells)
-        weights = (weights * self.radial[:, self.ridx]).view(b, self.k, 6, -1)
-        direction = self.direction.to(fmap.dtype)
-        tokens = fmap.new_zeros(b, self.k, 8)
+        weights = self.maps(self.reduce(fmap)).flatten(2).float()        # (B, 6k, cells)
+        # Token assembly in FP32 even under autocast (POSE3D_AMP): mixed dtypes break the index writes below.
+        with torch.autocast(fmap.device.type, enabled=False):
+            return self._assemble(weights, b)
+
+    def _assemble(self, weights, b):
+        weights = (weights * self.radial[:, self.ridx].float()).view(b, self.k, 6, -1)
+        direction = self.direction.float()
+        tokens = weights.new_zeros(b, self.k, 8)
         tokens[..., list(self._INVARIANT)] = weights[:, :, :4].sum(-1)
         tokens[..., list(self._VECTOR)] = weights[:, :, 4] @ direction
         tokens[..., list(self._BIVECTOR)] = weights[:, :, 5] @ direction
@@ -110,7 +115,7 @@ class SO2ConditionHead(nn.Module):
         else:
             rms = tokens.pow(2).sum(-1).mean(-1, keepdim=True).add(1e-6).sqrt()   # (B, 1)
             scaled = self.gain * tokens / rms.unsqueeze(-1)
-        const = fmap.new_zeros(b, 2 if self.up_token else 1, 8)
+        const = tokens.new_zeros(b, 2 if self.up_token else 1, 8)
         const[:, 0, 3] = 1.0                                                   # the optical axis e3
         if self.up_token:
             const[:, 1, 2] = -1.0                                              # image up: -e2 (e2 = rows, down)

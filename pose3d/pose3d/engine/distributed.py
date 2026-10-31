@@ -142,8 +142,15 @@ def sync_buffers(model):
     """Copy rank 0's buffers (BatchNorm running statistics) to every rank before evaluation."""
     if not is_distributed():
         return
+    gpu = torch.device("cuda", torch.cuda.current_device()) if dist.get_backend() == "nccl" else None
     for buf in model.buffers():
-        dist.broadcast(buf, src=0)
+        if gpu is not None and buf.device.type == "cpu":
+            # NCCL broadcasts CUDA tensors only; AveragedModel keeps its n_averaged counter on the CPU.
+            moved = buf.to(gpu)
+            dist.broadcast(moved, src=0)
+            buf.copy_(moved.cpu())
+        else:
+            dist.broadcast(buf, src=0)
 
 
 def gather_errors(err, cfg=None):

@@ -83,6 +83,16 @@ class RunConfig:
     platform: Literal["kaggle", "colab"] = "kaggle"
     run_name: Optional[str] = None
     path_to_checkpoint: Optional[str] = None   # evaluate this checkpoint before training
+    # Continue an interrupted run from its per-epoch checkpoint (<run_name>.latest.pth: model, optimizer, scheduler,
+    # EMA and the next epoch): training resumes at that epoch with the same schedule.
+    resume_from: Optional[str] = None
+    # End this session after this epoch (a planned segment of a run longer than one Kaggle session), saving the
+    # per-epoch checkpoint; the next session continues with --resume_from. 0: train to n_epochs.
+    stop_after_epoch: int = 0
+    # Also end the session (after saving the per-epoch checkpoint) once another epoch would no longer fit in this many
+    # hours since the start of training, so a run longer than Kaggle's 12-hour session ends between epochs instead of
+    # being killed by Kaggle. The run continues with --resume_from. 0: off.
+    segment_hours: float = 0.0
     sanity_check: bool = False                 # one tiny batch; no checkpoint saved
     save_checkpoint: bool = True
     wandb_project: str = "3D Pose Estimation"
@@ -219,6 +229,7 @@ class DataConfig:
     points_test_rotations: int = 4   # modelnet10_points: fixed test poses per model (ModelNet10-SO(3): 4 views)
     points_repeats: int = 1          # modelnet10_points / symsol_points: draws (poses) per model per epoch
     points_fixed_train: bool = False  # symsol_points: a fixed training set (symsol_train_views clouds per shape)
+    symsol_likelihood: bool = True
     symsol_ll_equivalents: int = 8
     symsol_ll_steps: int = 50
     # Flow each training R0 to the nearest of the image's equivalent poses instead of a random one. With a random
@@ -351,6 +362,11 @@ class FlowConfig:
     # (R e1) e123, the velocity read out as a bivector, so the flow is exactly equivariant to
     # 90 deg turns and left-right flips of the map (GATrCloudField in models/gatr_denoiser.py).
     pose_tokens: Literal["rotor", "frame", "frame_ch", "frame_pin"] = "rotor"
+    # Native persistent Cartesian STF track, seeded from image cloud geometry.
+    gatr_native_stf: bool = False
+    gatr_native_stf_lmax: int = 6
+    gatr_native_stf_channels: int = 8
+    gatr_native_stf_eval_every: int = 5
     gatr_blocks: int = 4
     gatr_mv_channels: int = 8    # hidden multivector channels per token
     gatr_s_channels: int = 32    # hidden scalar channels per token

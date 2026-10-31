@@ -10,6 +10,8 @@ and `FlowConfig`: `adapter_grid`, `adapter_channels`, `conv_adapter`, `vector_fi
 `mlp_heads` and `fisher_prior`.
 """
 
+import os
+
 import torch
 import torch.nn as nn
 
@@ -251,6 +253,7 @@ class CliffordFlow(nn.Module):
                  gatr: dict = None,
                  gatr_zero_readout: bool = True,
                  gatr_final_norm: bool = False,
+                 native_stf: dict = None,
                  fisher_checkpoint: str = None,
                  cond_tokens: str = "pooled",
                  so2_channels: int = 128,
@@ -265,6 +268,10 @@ class CliffordFlow(nn.Module):
                  gatr_pose_harmonics: int = 0,
                  gatr_encoder: dict = None):
         super().__init__()
+        stf_layouts = (("spherecloud", "frame_pin"), ("so2", "frame_ch"))
+        if native_stf is not None and (vector_field != "gatr" or (cond_tokens, pose_tokens) not in stf_layouts
+                                       or condition_head != "none"):
+            raise ValueError("Native STF needs GATr + no condition head + (spherecloud, frame_pin) or (so2, frame_ch)")
         so3f = dict(so3fourier or {})
         rc = dict(rotorcorr or {})
         sphere_fields = ("so3fourier", "rotorcorr")
@@ -382,8 +389,16 @@ class CliffordFlow(nn.Module):
         elif pose_tokens == "frame_pin":
             from pose3d.models.gatr_denoiser import GATrCloudField
             # Scalar channels per condition token: the cell features plus the constant tokens' flags.
-            self.vector_field = GATrCloudField(self.adapter.conv_adapter.width - 8, final_norm=gatr_final_norm,
-                                               pose_lmax=gatr_pose_harmonics, **(gatr or {}))
+            if native_stf is not None:   # spherecloud + frame_pin: the native STF track inside the GATr cloud field
+                from pose3d.models.native_stf import NativeSTFCloudField
+                self.vector_field = NativeSTFCloudField(self.adapter.conv_adapter.width - 8,
+                    final_norm=gatr_final_norm, pose_lmax=gatr_pose_harmonics, **(gatr or {}), **native_stf)
+            else:
+                self.vector_field = GATrCloudField(self.adapter.conv_adapter.width - 8, final_norm=gatr_final_norm,
+                                                   pose_lmax=gatr_pose_harmonics, **(gatr or {}))
+        elif vector_field == "gatr" and native_stf is not None:   # so2 tokens + frame_ch: v4's GATr field + STF track
+            from pose3d.models.native_stf import STFVectorField
+            self.vector_field = STFVectorField(self.n_cond_mv, pose_channels=3, **(gatr or {}), **native_stf)
         elif vector_field == "gatr":
             from pose3d.models.gatr_denoiser import GATrVectorField
             self.vector_field = GATrVectorField(
@@ -473,8 +488,9 @@ class CliffordFlow(nn.Module):
         that do go to G R e_i, and the spatial velocity w = r v r~ goes to G w, so the network's
         symmetry matches the physical one. The body velocity v = r~ w r is returned, as before.
         """
-        frame = rotor_to_matrix(rotor, self.algebra).transpose(-1, -2)   # rows: R e1, R e2, R e3
-        frame_mv = self.algebra.embed(frame, (1, 2, 3))
+        with torch.autocast(rotor.device.type, enabled=False):   # pose geometry in FP32 under autocast
+            frame = rotor_to_matrix(rotor.float(), self.algebra).transpose(-1, -2)   # rows: R e1, R e2, R e3
+            frame_mv = self.algebra.embed(frame, (1, 2, 3))
         if self.pose_tokens == "frame_ch":
             # The whole frame as 3 channels of token 0; time and condition tokens use channel 0.
             rest = torch.cat([t_mv, cond_mv], dim=1).unsqueeze(2)                 # (B, 1 + n_cond, 1, 8)
@@ -483,7 +499,8 @@ class CliffordFlow(nn.Module):
         else:
             inp = torch.cat([frame_mv, t_mv, cond_mv], dim=1)
         spatial = self.algebra.get_grade(self.vector_field(inp)[:, 0], 2)  # e12, e13, e23
-        return self._spatial_to_body(rotor, spatial)
+        with torch.autocast(rotor.device.type, enabled=False):
+            return self._spatial_to_body(rotor.float(), spatial.float())
 
     def _pin_velocity(self, rotor, t, cond):
         """P1: the pose as l = (R e1) e123 (axial), R e2, R e3 (polar), a bivector velocity out."""
@@ -509,6 +526,16 @@ class CliffordFlow(nn.Module):
         # small, so drawing several (t, r0) pairs per image buys that many more
         # flow-matching samples for one shared conditioning pass.
         cond_mv, fisher_a = self._features(img, cls)
+        # Rotor math (targets, interpolation, loss) in FP32 even under autocast (POSE3D_AMP); only the networks
+        # (backbone, heads, vector field) run in reduced precision.
+        amp_dtype = None
+        if torch.is_autocast_enabled():   # the caller's autocast (train_epoch with POSE3D_AMP): keep it for the networks
+            get = getattr(torch, "get_autocast_dtype", None)
+            amp_dtype = get(img.device.type) if get else torch.get_autocast_gpu_dtype()
+        with torch.autocast(img.device.type, enabled=False):
+            return self._flow_loss(cond_mv, fisher_a, rot_gt.float(), rots_eq, n_eq, amp_dtype)
+
+    def _flow_loss(self, cond_mv, fisher_a, rot_gt, rots_eq, n_eq, amp_dtype=None):
         r1 = matrix_to_rotor(rot_gt)
 
         fisher_loss = None
@@ -538,9 +565,10 @@ class CliffordFlow(nn.Module):
 
         rt = geodesic_interpolate(r0, r1, t, self.algebra)
         target = relative_log(r0, r1, self.algebra)
-        pred = self.velocity(rt, t, cond_mv)
+        with torch.autocast(rt.device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
+            pred = self.velocity(rt, t, cond_mv)
         # Still a per-sample mean, so the value stays comparable across k.
-        loss = (pred - target).pow(2).sum(-1).mean()
+        loss = (pred.float() - target).pow(2).sum(-1).mean()
         if fisher_loss is not None:
             loss = loss + fisher_loss
         return loss
