@@ -9,7 +9,7 @@ Two types of GPU are available in our pool:
 
 | GPU | Use for |
 |---|---|
-| RTX cards | main experiments |
+| 4xL4 (`--accelerator l4`, 2x quota per hour) | main experiments |
 | 2xT4 | side quests |
 
 * **Always calculate an approximate ETA** of a GPU run before launching it, and state it.
