@@ -25,3 +25,10 @@ and learnable); 4xL4 instead of 2xT4 (same global batch 64); 8 data workers.
 dependency cell) and the code tarball in its working directory. The kernel tests itself before training: CPU tests
 (`test_symsol_chile`, `test_resume`, `test_spherecloud`, `test_dircloud`), then a GPU build of the exact model (field type,
 94k-98k field parameters, gain 100, 369 condition tokens, a finite 2-step prediction).
+
+## Result (2026-11-28, kernel complete 09:5x UTC)
+
+Final evaluation, 32 samples per image (geodesic medoid), 1,000 test images: **median 2.00 deg, acc@15 0.982,
+acc@30 1.000**. Per-epoch single-sample median error: ~13 deg (the guessed-turn level) from epoch ~25 to ~100, then a
+steady fall to 2.35 deg at epoch 180. The GATr-cosdir runs with the same recipe never left the plateau (final 12.74 and
+13.11 deg). Single seed. Chart: `pyr7_geobias_vs_gatr.png` in the repository root (`plot_pyr7.py`).
