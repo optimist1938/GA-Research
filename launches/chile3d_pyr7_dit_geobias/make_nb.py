@@ -5,9 +5,12 @@ gatr_line = [l for l in gatr_cell.split('\n') if l.startswith('GATR_WHEELS')][0]
 deps_src = '\n'.join(l for l in gatr_cell.split('\n') if not l.startswith('GATR_WHEELS'))
 deps_src = deps_src.replace(
     "shutil.copy(os.path.join(DEPS_DIR, 'resnet101-cd907fc2.pth'), os.path.join(ckpt_dir, 'resnet101-cd907fc2.pth'))",
-    "for w in ('resnet50-11ad3fa6.pth', 'resnet101-cd907fc2.pth'):   # ImageNet weights (--encoder resnet50 loads the first)\n"
-    "    shutil.copy(os.path.join(DEPS_DIR, w), os.path.join(ckpt_dir, w))")
-assert 'resnet50-11ad3fa6.pth' in deps_src
+    "for w in ('resnet50-11ad3fa6.pth', 'resnet101-cd907fc2.pth'):   # ImageNet weights, from any attached dataset\n"
+    "    found = sorted(glob.glob(f'/kaggle/input/**/{w}', recursive=True))\n"
+    "    assert found or w != 'resnet50-11ad3fa6.pth', 'no resnet50-11ad3fa6.pth in the attached datasets'\n"
+    "    if found:\n"
+    "        shutil.copy(found[0], os.path.join(ckpt_dir, w)); print('ImageNet weights:', found[0], flush=True)")
+assert "glob.glob(f'/kaggle/input/**/{w}'" in deps_src
 code_b64 = base64.b64encode(open('build/code.tgz', 'rb').read()).decode()
 
 RUN = 'chile3d_pyr7_dit_geobias_grid14_nside8_s100_e180_l4x4'
